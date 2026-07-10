@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phronexus-core"
+version = "0.1.0"
+description = "Contract-driven data projection framework over Aerospike with optional Iceberg retention"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Phronexus" }]
+dependencies = [
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "pyyaml>=6.0",
+    "structlog>=24.1",
+]
+
+[project.optional-dependencies]
+# Backends and integrations are optional so the core + in-memory backend
+# stay importable with a minimal dependency footprint.
+aerospike = ["aerospike>=14.0"]
+kafka = ["confluent-kafka>=2.3"]
+iceberg = ["pyiceberg>=0.6", "pyarrow>=15.0"]
+api = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
+otel = [
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp>=1.24",
+    "opentelemetry-instrumentation-fastapi>=0.45b0",
+]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+include = ["phronexus*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

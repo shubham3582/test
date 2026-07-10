@@ -1,0 +1,20 @@
+# A second business entity onboarded purely by config — no code changes.
+kind: storage
+entity: fx_spot
+version: 1
+primary_key: [deal_id]
+manifest_set: fx_manifest
+update_policy: upsert
+delete_policy: hard
+projections:
+  - name: main
+    set: fx_main
+    key: "{deal_id}"
+    fields: ["*"]
+    canonical: true
+  - name: by_pair
+    set: fx_by_pair
+    key: "{pair}:{deal_id}"
+    fields: [deal_id, pair, notional, rate, trade_date]
+iceberg:
+  enabled: false

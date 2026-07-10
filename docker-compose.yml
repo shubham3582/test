@@ -1,0 +1,32 @@
+# Local stack for Phronexus Core.
+# Phases 0-2 run fully on the in-memory backend (no services needed);
+# this compose brings up the services the Aerospike/Kafka/Iceberg paths use.
+services:
+  aerospike:
+    image: aerospike/aerospike-server:7.1.0.0
+    ports: ["3000-3002:3000-3002"]
+    command: ["--config-file", "/etc/aerospike/aerospike.conf"]
+    volumes:
+      - ./deploy/aerospike.conf:/etc/aerospike/aerospike.conf:ro
+
+  redpanda:
+    image: redpandadata/redpanda:v24.1.7
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://localhost:9092
+    ports: ["9092:9092"]
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    ports: ["9000:9000", "9001:9001"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports: ["4317:4317"]

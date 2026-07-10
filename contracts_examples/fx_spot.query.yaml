@@ -1,0 +1,11 @@
+kind: query
+entity: fx_spot
+version: 1
+searchable:
+  - {field: pair, index: string}
+  - {field: rate, index: numeric}
+  - {field: trade_date, index: numeric}
+patterns:
+  - name: by_pair
+    where:
+      - {field: pair, op: eq, value: "${pair}"}

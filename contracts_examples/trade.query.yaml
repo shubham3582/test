@@ -1,0 +1,16 @@
+kind: query
+entity: trade
+version: 1
+searchable:
+  - {field: counterparty, index: string}
+  - {field: ccy, index: string}
+  - {field: trade_date, index: numeric}
+  - {field: notional, index: numeric}
+patterns:
+  - name: by_counterparty
+    where:
+      - {field: counterparty, op: eq, value: "${cpty}"}
+  - name: cpty_since
+    where:
+      - {field: counterparty, op: eq, value: "${cpty}"}
+      - {field: trade_date, op: gte, value: "${since}"}

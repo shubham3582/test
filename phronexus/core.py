@@ -1,0 +1,108 @@
+"""The Phronexus facade — the single object apps and the REST layer use.
+
+Wires the KV backend, contract registry, write/read/delete engine, inverted
+index + query engine, and view engine together from :class:`Settings`.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+import structlog
+
+from phronexus.config import Settings
+from phronexus.contracts.loader import Contract, load_dir, load_file, parse_contract
+from phronexus.contracts.registry import ContractRegistry
+from phronexus.events import build_sink
+from phronexus.kv import build_store
+from phronexus.manifest.manager import ManifestManager
+from phronexus.manifest.reaper import Reaper
+from phronexus.observability.logging import configure_logging
+from phronexus.observability.telemetry import Telemetry
+from phronexus.query.engine import QueryEngine
+from phronexus.query.inverted import InvertedIndex
+from phronexus.query.models import QueryDoc
+from phronexus.views.engine import ViewEngine
+
+log = structlog.get_logger(__name__)
+
+
+class _ManifestReader:
+    """Adapts ManifestManager to the QueryEngine's DocReader protocol."""
+
+    def __init__(self, manager: ManifestManager):
+        self._m = manager
+
+    def read(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
+        return self._m.read(entity, doc_id)
+
+
+class Phronexus:
+    def __init__(self, settings: Optional[Settings] = None):
+        self.settings = settings or Settings()
+        configure_logging(self.settings.observability)
+
+        self.telemetry = Telemetry(self.settings.observability)
+        self.store = build_store(self.settings)
+        self.registry = ContractRegistry(
+            self.store,
+            contracts_set=self.settings.aerospike.contracts_set,
+            refresh_seconds=self.settings.contracts.refresh_seconds,
+            background_refresh=self.settings.contracts.background_refresh,
+        )
+        self.index = InvertedIndex(self.store, index_set=self.settings.aerospike.index_set)
+        self.sink = build_sink(self.settings)
+        self.manifest = ManifestManager(
+            self.store, self.registry, self.index, self.sink, self.telemetry
+        )
+        self.query_engine = QueryEngine(self.registry, self.index, _ManifestReader(self.manifest))
+        self.view_engine = ViewEngine(self.registry)
+        self.reaper = Reaper(self.store, self.registry)
+        log.info("phronexus.ready", backend=self.settings.backend)
+
+    # --- contract admin -------------------------------------------------
+
+    def publish_contract(self, contract: Contract | dict, *, activate: bool = True) -> None:
+        c = contract if not isinstance(contract, dict) else parse_contract(contract)
+        self.registry.publish(c, activate=activate)
+
+    def load_contract_file(self, path: str, *, activate: bool = True) -> None:
+        self.registry.publish(load_file(path), activate=activate)
+
+    def load_contract_dir(self, path: str, *, activate: bool = True) -> None:
+        for c in load_dir(path):
+            self.registry.publish(c, activate=activate)
+
+    def refresh_contracts(self) -> None:
+        self.registry.refresh(force=True)
+
+    # --- data plane -----------------------------------------------------
+
+    def put(self, entity: str, document: dict[str, Any]) -> str:
+        return self.manifest.write(entity, document)
+
+    def get(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
+        return self.manifest.read(entity, doc_id)
+
+    def delete(self, entity: str, doc_id: str) -> bool:
+        return self.manifest.delete(entity, doc_id)
+
+    def query(self, query: QueryDoc | dict) -> list[dict[str, Any]]:
+        return self.query_engine.run(query)
+
+    def query_pattern(self, entity: str, pattern: str, **params: Any) -> list[dict[str, Any]]:
+        return self.query_engine.run_pattern(entity, pattern, params)
+
+    def view(self, entity: str, view: str, doc_id: str) -> Optional[dict[str, Any]]:
+        doc = self.get(entity, doc_id)
+        return self.view_engine.apply(entity, view, doc) if doc is not None else None
+
+    def query_view(self, entity: str, view: str, query: QueryDoc | dict) -> list[dict[str, Any]]:
+        return self.view_engine.apply_many(entity, view, self.query(query))
+
+    # --- lifecycle ------------------------------------------------------
+
+    def close(self) -> None:
+        self.registry.close()
+        self.sink.close()
+        self.store.close()

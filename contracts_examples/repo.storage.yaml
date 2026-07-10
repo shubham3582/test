@@ -1,0 +1,23 @@
+# Repo (repurchase agreement) entity — again, config only.
+kind: storage
+entity: repo
+version: 1
+primary_key: [repo_id]
+manifest_set: repo_manifest
+update_policy: insert_only          # repos are booked once, never overwritten
+delete_policy: soft
+projections:
+  - name: main
+    set: repo_main
+    key: "{repo_id}"
+    fields: ["*"]
+    canonical: true
+  - name: by_counterparty
+    set: repo_by_cpty
+    key: "{counterparty}:{repo_id}"
+    fields: [repo_id, counterparty, principal, rate, maturity_date]
+iceberg:
+  enabled: true
+  table: warehouse.repos
+  partition_by: [maturity_date]
+  retention_days: 2555

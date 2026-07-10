@@ -1,0 +1,7 @@
+kind: view
+entity: trade
+view: risk_consumer
+version: 1
+fields: [trade_id, counterparty, notional, ccy, trade_date]
+transform:
+  notional: round2

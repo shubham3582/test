@@ -1,0 +1,229 @@
+"""The write/read/delete engine built on the manifest pattern.
+
+Write: all projection records are written first, then the manifest last — the
+single commit point that makes a document visible. On backends with native
+multi-record transactions (Aerospike 8.0+, and the in-memory backend) the whole
+set is one atomic transaction; the manifest still exists so reads have a single
+authoritative "is this committed?" record and so partial/crashed writes leave
+only invisible orphans (swept by the reaper).
+
+Concurrency: the manifest is written with a generation CAS, giving optimistic
+concurrency across competing writers. The inverted index is maintained *after*
+commit as a derived structure — a stale posting is validated away on read.
+"""
+
+from __future__ import annotations
+
+import time
+import uuid
+from typing import Any, Optional
+
+import structlog
+
+from phronexus.contracts.models import DeletePolicy, StorageContract, UpdatePolicy
+from phronexus.contracts.registry import ContractRegistry
+from phronexus.errors import ContractNotFound, DocumentAlreadyExists, DocumentNotFound
+from phronexus.events.base import CommitEvent, EventSink
+from phronexus.kv.base import KVStore
+from phronexus.observability.telemetry import Telemetry
+from phronexus.query.inverted import InvertedIndex
+from phronexus.storage.projection import DOC_BIN, META_TXN, ProjectionEngine
+
+log = structlog.get_logger(__name__)
+
+_MISSING = object()
+
+# Manifest bins
+M_STATUS = "status"
+M_TXN = "txn"
+M_CVER = "cver"
+M_DOC_ID = "doc_id"
+M_CANONICAL = "canonical"  # {"set":..., "key":...}
+M_PROJECTIONS = "projections"  # [{"set":..., "key":...}, ...]
+M_TS = "ts"
+M_PREV_TXN = "prev_txn"
+
+STATUS_COMMITTED = "committed"
+STATUS_DELETED = "deleted"
+
+
+class ManifestManager:
+    def __init__(
+        self,
+        store: KVStore,
+        registry: ContractRegistry,
+        index: InvertedIndex,
+        sink: EventSink,
+        telemetry: Telemetry,
+    ):
+        self._store = store
+        self._registry = registry
+        self._index = index
+        self._sink = sink
+        self._tel = telemetry
+        self._proj = ProjectionEngine()
+
+    # --- write ----------------------------------------------------------
+
+    def write(self, entity: str, document: dict[str, Any]) -> str:
+        with self._tel.span("manifest.write", entity=entity), self._tel.timed(
+            "phronexus.write.latency", entity=entity
+        ):
+            sc = self._registry.active_storage(entity)
+            doc_id = self._proj.compute_doc_id(sc, document)
+            txn_id = uuid.uuid4().hex
+
+            existing = self._store.get(sc.manifest_set, doc_id)
+            prev_committed = existing is not None and existing.bins.get(M_STATUS) == STATUS_COMMITTED
+            if sc.update_policy == UpdatePolicy.insert_only and prev_committed:
+                raise DocumentAlreadyExists(f"{entity}/{doc_id} already exists")
+
+            old_data = self._read_canonical_data(existing)
+            records = self._proj.build(sc, document, doc_id=doc_id, txn_id=txn_id)
+            canonical = next(r for r in records if r.projection.canonical)
+
+            manifest_bins = {
+                M_STATUS: STATUS_COMMITTED,
+                M_TXN: txn_id,
+                M_CVER: sc.version,
+                M_DOC_ID: doc_id,
+                M_CANONICAL: {"set": canonical.projection.set, "key": canonical.key},
+                M_PROJECTIONS: [{"set": r.projection.set, "key": r.key} for r in records],
+                M_TS: time.time(),
+                M_PREV_TXN: existing.bins.get(M_TXN) if existing else None,
+            }
+            expected_gen = existing.generation if existing else 0
+
+            # Projections first, manifest last — atomically.
+            with self._store.transaction() as txn:
+                for r in records:
+                    self._store.put(r.projection.set, r.key, r.bins, ttl=r.ttl, txn=txn)
+                self._store.put(
+                    sc.manifest_set, doc_id, manifest_bins,
+                    expected_generation=expected_gen, txn=txn,
+                )
+
+            self._tel.incr("phronexus.writes", entity=entity)
+            self._reindex(entity, doc_id, old_data, document)
+            self._reap_superseded(existing, records, sc)
+            self._sink.emit(
+                CommitEvent(
+                    entity=entity, doc_id=doc_id, txn_id=txn_id,
+                    contract_version=sc.version, op="upsert",
+                    ts=manifest_bins[M_TS], document=dict(document),
+                )
+            )
+            log.info("document.committed", entity=entity, doc_id=doc_id, txn=txn_id)
+            return doc_id
+
+    # --- read -----------------------------------------------------------
+
+    def read(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
+        with self._tel.span("manifest.read", entity=entity):
+            sc = self._registry.active_storage(entity)
+            manifest = self._store.get(sc.manifest_set, doc_id)
+            if manifest is None or manifest.bins.get(M_STATUS) != STATUS_COMMITTED:
+                return None
+            canon = manifest.bins[M_CANONICAL]
+            rec = self._store.get(canon["set"], canon["key"])
+            if rec is None:
+                return None
+            # Snapshot check: the canonical key is PK-derived and stable, so with
+            # atomic commits its txn always matches the manifest. A mismatch means
+            # a non-transactional partial write — treat as not-yet-visible.
+            if rec.bins.get(META_TXN) != manifest.bins.get(M_TXN):
+                log.warning("manifest.txn_mismatch", entity=entity, doc_id=doc_id)
+                return None
+            self._tel.incr("phronexus.reads", entity=entity)
+            return dict(rec.bins.get(DOC_BIN, {}))
+
+    def exists(self, entity: str, doc_id: str) -> bool:
+        return self.read(entity, doc_id) is not None
+
+    # --- delete ---------------------------------------------------------
+
+    def delete(self, entity: str, doc_id: str) -> bool:
+        with self._tel.span("manifest.delete", entity=entity):
+            sc = self._registry.active_storage(entity)
+            manifest = self._store.get(sc.manifest_set, doc_id)
+            if manifest is None or manifest.bins.get(M_STATUS) != STATUS_COMMITTED:
+                raise DocumentNotFound(f"{entity}/{doc_id} not found")
+
+            old_data = self._read_canonical_data(manifest)
+            expected_gen = manifest.generation
+
+            if sc.delete_policy == DeletePolicy.soft:
+                new_bins = dict(manifest.bins)
+                new_bins[M_STATUS] = STATUS_DELETED
+                new_bins[M_TS] = time.time()
+                with self._store.transaction() as txn:
+                    self._store.put(
+                        sc.manifest_set, doc_id, new_bins,
+                        expected_generation=expected_gen, txn=txn,
+                    )
+            else:  # hard delete: remove projections then manifest
+                with self._store.transaction() as txn:
+                    for p in manifest.bins.get(M_PROJECTIONS, []):
+                        self._store.remove(p["set"], p["key"], txn=txn)
+                    self._store.remove(
+                        sc.manifest_set, doc_id, expected_generation=expected_gen, txn=txn
+                    )
+
+            self._deindex(entity, doc_id, old_data)
+            self._tel.incr("phronexus.deletes", entity=entity)
+            self._sink.emit(
+                CommitEvent(
+                    entity=entity, doc_id=doc_id, txn_id=uuid.uuid4().hex,
+                    contract_version=sc.version, op="delete", ts=time.time(), document=None,
+                )
+            )
+            log.info("document.deleted", entity=entity, doc_id=doc_id, policy=sc.delete_policy.value)
+            return True
+
+    # --- index maintenance ---------------------------------------------
+
+    def _searchable(self, entity: str):
+        try:
+            return self._registry.active_query(entity).searchable
+        except ContractNotFound:
+            return []  # no query contract yet -> nothing to index
+
+    def _reindex(self, entity, doc_id, old_data, new_doc) -> None:
+        for sf in self._searchable(entity):
+            old_v = old_data.get(sf.field, _MISSING)
+            new_v = new_doc.get(sf.field, _MISSING)
+            if old_v == new_v:
+                continue
+            if old_v is not _MISSING:
+                self._index.remove(entity, sf.field, old_v, doc_id)
+            if new_v is not _MISSING:
+                self._index.add(entity, sf.field, new_v, doc_id, numeric=sf.supports_range)
+
+    def _deindex(self, entity, doc_id, old_data) -> None:
+        for sf in self._searchable(entity):
+            v = old_data.get(sf.field, _MISSING)
+            if v is not _MISSING:
+                self._index.remove(entity, sf.field, v, doc_id)
+
+    # --- helpers --------------------------------------------------------
+
+    def _read_canonical_data(self, manifest) -> dict[str, Any]:
+        if manifest is None:
+            return {}
+        canon = manifest.bins.get(M_CANONICAL)
+        if not canon:
+            return {}
+        rec = self._store.get(canon["set"], canon["key"])
+        return dict(rec.bins.get(DOC_BIN, {})) if rec else {}
+
+    def _reap_superseded(self, existing, records, sc: StorageContract) -> None:
+        """Remove projection records no longer referenced after an update."""
+        if existing is None:
+            return
+        new_keys = {(r.projection.set, r.key) for r in records}
+        for p in existing.bins.get(M_PROJECTIONS, []):
+            if (p["set"], p["key"]) not in new_keys:
+                try:
+                    self._store.remove(p["set"], p["key"])
+                except Exception:  # noqa: BLE001 - best effort
+                    log.warning("reap.superseded_failed", set=p["set"], key=p["key"])

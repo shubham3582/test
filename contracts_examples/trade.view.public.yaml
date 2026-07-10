@@ -1,0 +1,6 @@
+kind: view
+entity: trade
+view: public
+version: 1
+fields: [trade_id, counterparty, ccy, trade_date]
+mask: [counterparty]        # redact the counterparty for the public view

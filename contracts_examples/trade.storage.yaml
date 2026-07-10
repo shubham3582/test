@@ -1,0 +1,26 @@
+kind: storage
+entity: trade
+version: 1
+primary_key: [trade_id]
+manifest_set: trade_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  # Canonical projection: holds the full document, keyed by primary key only.
+  - name: main
+    set: trade_main
+    key: "{trade_id}"
+    fields: ["*"]
+    canonical: true
+    ttl: 0
+  # Read-optimised projection for counterparty-scoped access.
+  - name: by_counterparty
+    set: trade_by_cpty
+    key: "{counterparty}:{trade_id}"
+    fields: [trade_id, counterparty, notional, ccy, trade_date]
+    ttl: 7776000            # 90 days
+iceberg:
+  enabled: true
+  table: warehouse.trades
+  partition_by: [trade_date]
+  retention_days: 3650
