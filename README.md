@@ -12,9 +12,11 @@ contracts** that live in the datastore and hot-reload, so new business entities
 - **Change feed:** Kafka / Redpanda
 - **Interfaces:** Python SDK + REST (REST is *Phase 3*)
 
-> **Status:** Phases 0–3 complete — contracts, write/read via the manifest
-> pattern, config-driven inverted-index search, consumer views, and a REST API
-> + remote SDK with API-key/bearer/mTLS auth. Runs today on a built-in
+> **Status:** Phases 0–5 complete (feature-complete prototype) — contracts,
+> write/read via the manifest pattern, config-driven inverted-index search,
+> consumer views, REST API + remote SDK with API-key/bearer/mTLS auth, async
+> Iceberg retention off the Kafka change feed, and operational tooling
+> (contract backfill, admin CLI, load harness). Runs today on a built-in
 > in-memory backend (no services required) and on Aerospike.
 
 ---
@@ -133,6 +135,46 @@ additionally require an admin principal. Every request gets a bound `request_id`
 in the structured logs and an `X-Request-ID` response header; OTel FastAPI
 instrumentation attaches when `OTEL_ENABLED=true`.
 
+## Iceberg retention (async, off the change feed)
+
+Every committed document emits a `CommitEvent` onto the Kafka/Redpanda change
+feed. A separate **retention worker** consumes it and lands rows in the Iceberg
+table declared by each storage contract's `iceberg` block — only for entities
+that opt in. Aerospike stays the source of truth for the hot path; Iceberg is
+the analytical, long-term tail.
+
+- Upserts are keyed by doc id → **replays are idempotent**.
+- Deletes remove the row; rows carry `_expire_at` from `retention_days` for a
+  maintenance pass to drop aged data.
+- Pins the exact contract version that produced each document.
+
+```bash
+# production: its own process next to the app
+pip install -e '.[kafka,iceberg]'
+PHRONEXUS_BACKEND=aerospike PHRONEXUS_KAFKA__ENABLED=true \
+  PHRONEXUS_ICEBERG__ENABLED=true PHRONEXUS_ICEBERG__BACKEND=iceberg \
+  python -m phronexus.retention.main
+```
+
+## Operations
+
+**Contract backfill** — after a contract evolves (new projection / searchable
+field), re-project existing documents onto the active version. Idempotent:
+
+```bash
+phronexus --contracts-dir contracts_examples backfill trade
+```
+
+**Admin CLI** (`phronexus …`): `publish-contract`, `put`, `get`, `delete`,
+`query [--view]`, `backfill [--dry-run]`, `reap`. Backend/auth from `PHRONEXUS_*`.
+
+**Load harness** (in-memory backend, exercises writes → reads → search →
+retention end to end):
+
+```bash
+python scripts/loadtest.py --docs 20000 --queries 5000
+```
+
 ## Running against real infrastructure
 
 ```bash
@@ -160,14 +202,22 @@ phronexus/
   observability/       # structured logging + OTel telemetry
   api/                 # FastAPI app, routers, auth, middleware, server
   sdk/                 # PhronexusClient (remote HTTP SDK)
+  retention/           # change-feed source, warehouse, Iceberg worker
+  admin/               # contract backfill job
+  cli.py               # phronexus admin CLI
   core.py              # Phronexus facade (in-process SDK entrypoint)
+scripts/loadtest.py    # throughput harness
 ```
 
 ## Roadmap
 
 - ~~**Phase 3** — REST API (FastAPI), auth (API key / bearer / mTLS-CN), request tracing.~~ ✅
-- **Phase 4** — Iceberg retention worker consuming the Kafka change feed.
-- **Phase 5** — load tests, contract backfill jobs, admin CLI.
+- ~~**Phase 4** — Iceberg retention worker consuming the Kafka change feed.~~ ✅
+- ~~**Phase 5** — load tests, contract backfill job, admin CLI.~~ ✅
+
+**Beyond the prototype:** row-level Iceberg merge/compaction, index sharding for
+hot terms, contract schema-compatibility checks on publish, RBAC scopes per
+view, and horizontal load testing against a real Aerospike + Kafka cluster.
 
 ## Design decisions
 

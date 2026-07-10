@@ -17,6 +17,9 @@ dependencies = [
     "structlog>=24.1",
 ]
 
+[project.scripts]
+phronexus = "phronexus.cli:main"
+
 [project.optional-dependencies]
 # Backends and integrations are optional so the core + in-memory backend
 # stay importable with a minimal dependency footprint.

@@ -38,8 +38,12 @@ class KafkaSettings(BaseModel):
 
 class IcebergSettings(BaseModel):
     enabled: bool = False
+    # "memory" (in-process warehouse for tests/demos) or "iceberg" (pyiceberg).
+    backend: str = "memory"
+    catalog_name: str = "phronexus"
     catalog_uri: str = "http://localhost:8181"
     warehouse: str = "s3://phronexus/warehouse"
+    batch_size: int = 500
 
 
 class AuthSettings(BaseModel):
