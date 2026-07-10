@@ -1,0 +1,24 @@
+# Kafka / Redpanda — change-feed and state-machine transport.
+# Maps to phronexus.config.KafkaSettings.
+
+enabled: true
+bootstrap_servers: "${KAFKA_BOOTSTRAP:-localhost:9093}"
+client_id: phronexus-core
+topic_prefix: phronexus.commits
+
+# --- security ---
+# PLAINTEXT | SSL | SASL_SSL | SASL_PLAINTEXT
+security_protocol: "${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}"
+
+# TLS / mTLS
+ssl_cafile: "${KAFKA_SSL_CAFILE:-/etc/phronexus/certs/kafka-ca.pem}"
+ssl_certfile: "${KAFKA_SSL_CERTFILE:-/etc/phronexus/certs/kafka-client.pem}"   # mTLS
+ssl_keyfile: "${KAFKA_SSL_KEYFILE:-/etc/phronexus/certs/kafka-client.key}"     # mTLS
+ssl_key_password: "${KAFKA_SSL_KEY_PASSWORD:-}"
+ssl_verify: true
+ssl_endpoint_identification: true
+
+# SASL (used when security_protocol is SASL_*)
+sasl_mechanism: "${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}"   # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512 | OAUTHBEARER
+sasl_username: "${KAFKA_SASL_USERNAME:-}"
+sasl_password: "${KAFKA_SASL_PASSWORD:-}"

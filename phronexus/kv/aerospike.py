@@ -55,6 +55,10 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
             if h.strip()
         ]
         config: dict[str, Any] = {"hosts": hosts}
+        # Authentication mode (INTERNAL / EXTERNAL / EXTERNAL_INSECURE / PKI).
+        auth_attr = f"AUTH_{cfg.auth_mode.upper()}"
+        if hasattr(aerospike, auth_attr):
+            config["policies"] = {"auth_mode": getattr(aerospike, auth_attr)}
         if cfg.tls_enable:
             config["tls"] = {
                 "enable": True,

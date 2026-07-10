@@ -1,0 +1,10 @@
+# Transactional state machine.
+# Maps to phronexus.config.StateMachineSettings.
+
+outbox_set: _sm_outbox
+dedup_set: _sm_dedup
+dedup_ttl: 604800                       # 7 days
+consumer_group: phronexus-statemachine
+input_topics:
+  - trades.events
+  - fx.events

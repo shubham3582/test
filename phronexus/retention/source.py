@@ -43,14 +43,13 @@ class KafkaEventSource(EventSource):  # pragma: no cover - needs a broker
             raise ConfigError(
                 "KafkaEventSource requires confluent-kafka: pip install 'phronexus-core[kafka]'"
             ) from exc
-        self._consumer = Consumer(
-            {
-                "bootstrap.servers": cfg.bootstrap_servers,
-                "group.id": group_id,
-                "auto.offset.reset": "earliest",
-                "enable.auto.commit": True,
-            }
-        )
+        conf = cfg.client_config()  # TLS/mTLS + SASL
+        conf.update({
+            "group.id": group_id,
+            "auto.offset.reset": "earliest",
+            "enable.auto.commit": True,
+        })
+        self._consumer = Consumer(conf)
         self._consumer.subscribe([f"{cfg.topic_prefix}.{e}" for e in entities])
 
     def poll(self, max_events: int) -> list[CommitEvent]:

@@ -1,0 +1,10 @@
+# Top-level Phronexus settings. Per-subsystem settings live in sibling files
+# (aerospike.yaml, kafka.yaml, iceberg.yaml, api.yaml, ...).
+#
+# Enable this directory with:  export PHRONEXUS_CONFIG_DIR=./config
+# Any value can be overridden at deploy time by an environment variable, e.g.
+#   PHRONEXUS_BACKEND=memory
+# Secrets must be referenced as ${ENV_VAR} (or ${ENV_VAR:-default}) and supplied
+# from the environment — never commit real credentials to these files.
+
+backend: "${PHRONEXUS_BACKEND:-aerospike}"   # memory | aerospike

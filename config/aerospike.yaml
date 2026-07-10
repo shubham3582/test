@@ -1,0 +1,22 @@
+# Aerospike — primary operational store.
+# Maps to phronexus.config.AerospikeSettings.
+
+hosts: "${AEROSPIKE_HOSTS:-127.0.0.1:4333}"     # comma-separated host:port pairs
+namespace: phronexus
+use_native_txn: true                            # Aerospike 8.0+ multi-record txns
+
+# --- sets (namespaces of records) ---
+contracts_set: _contracts
+index_set: _inv
+outbox_set: _outbox
+
+# --- security: TLS / mTLS + authentication ---
+tls_enable: true
+tls_name: "${AEROSPIKE_TLS_NAME:-phronexus.aerospike}"
+tls_cafile: "${AEROSPIKE_TLS_CAFILE:-/etc/phronexus/certs/aerospike-ca.pem}"
+tls_certfile: "${AEROSPIKE_TLS_CERTFILE:-/etc/phronexus/certs/aerospike-client.pem}"  # mTLS
+tls_keyfile: "${AEROSPIKE_TLS_KEYFILE:-/etc/phronexus/certs/aerospike-client.key}"    # mTLS
+
+auth_mode: "${AEROSPIKE_AUTH_MODE:-EXTERNAL}"   # INTERNAL | EXTERNAL | EXTERNAL_INSECURE | PKI
+user: "${AEROSPIKE_USER:-}"
+password: "${AEROSPIKE_PASSWORD:-}"

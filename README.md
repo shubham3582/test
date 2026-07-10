@@ -197,6 +197,29 @@ retention end to end):
 python scripts/loadtest.py --docs 20000 --queries 5000
 ```
 
+## Configuration
+
+Config is layered (highest precedence first): constructor kwargs → environment
+variables (`PHRONEXUS_*`, nested with `__`) → `.env` → **per-subsystem YAML files**
+→ file secrets. Production deployments keep readable, version-controlled files per
+subsystem under [`config/`](config/) and override individual values with env vars:
+
+```bash
+export PHRONEXUS_CONFIG_DIR=./config      # opt-in; unset keeps the in-memory dev default
+python -m phronexus.api.server
+```
+
+| File | Subsystem | Security |
+|------|-----------|----------|
+| `config/aerospike.yaml` | operational store | TLS/mTLS, user/pass, auth mode |
+| `config/kafka.yaml` | change-feed / state-machine transport | TLS/mTLS, SASL (SCRAM/PLAIN/OAUTHBEARER) |
+| `config/iceberg.yaml` | long-term retention | REST-catalog token/TLS, S3 credentials |
+| `config/api.yaml` | REST server + auth | server TLS/mTLS, API-key/bearer/mTLS |
+
+Secrets are never committed — reference them with `${ENV_VAR}` / `${ENV_VAR:-default}`
+placeholders that resolve from the environment at load time; certificate/key paths
+point at mounted secrets. See [`config/README.md`](config/README.md).
+
 ## Running against real infrastructure
 
 ```bash

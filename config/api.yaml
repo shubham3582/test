@@ -1,0 +1,26 @@
+# REST API server + authentication.
+# Maps to phronexus.config.ApiSettings.
+
+host: 0.0.0.0
+port: 8443
+
+# --- server-side TLS / mTLS (uvicorn) ---
+tls_certfile: "${API_TLS_CERTFILE:-/etc/phronexus/certs/api-server.pem}"
+tls_keyfile: "${API_TLS_KEYFILE:-/etc/phronexus/certs/api-server.key}"
+tls_ca_certs: "${API_TLS_CA_CERTS:-/etc/phronexus/certs/api-client-ca.pem}"  # verify client certs
+require_client_cert: true                                                    # enforce mTLS
+
+# --- authentication ---
+auth:
+  # tried in order: none | api_key | bearer | mtls
+  schemes: ["mtls", "bearer"]
+  api_key_header: X-API-Key
+  mtls_cn_header: X-Client-Cert-CN
+  # CN -> principal (empty allows any presented CN)
+  mtls_allowed_cns:
+    risk.svc.internal: svc-risk
+    settlement.svc.internal: svc-settlement
+  # opaque bearer token -> principal (reference secrets via ${ENV})
+  bearer_tokens:
+    "${API_BEARER_TOKEN:-}": svc-admin
+  admin_principals: ["svc-admin"]

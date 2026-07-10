@@ -79,7 +79,8 @@ class IcebergWarehouse(Warehouse):  # pragma: no cover - needs catalog + pyarrow
                 "IcebergWarehouse requires pyiceberg + pyarrow: pip install 'phronexus-core[iceberg]'"
             ) from exc
         self._cfg = cfg
-        self._catalog = load_catalog(cfg.catalog_name, uri=cfg.catalog_uri, warehouse=cfg.warehouse)
+        # catalog_properties() carries the REST-catalog token/TLS + S3 credentials.
+        self._catalog = load_catalog(cfg.catalog_name, **cfg.catalog_properties())
         self._buffers: dict[str, list[dict[str, Any]]] = {}
 
     def upsert(self, table: str, doc_id: str, row: dict[str, Any]) -> None:

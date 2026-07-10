@@ -1,14 +1,40 @@
 """Runtime configuration.
 
-Settings are read from environment variables (prefix ``PHRONEXUS_``) and/or a
-``.env`` file. Nested groups use ``__`` as the delimiter, e.g.
-``PHRONEXUS_AEROSPIKE__HOSTS=10.0.0.1:3000``.
+Configuration is layered, highest precedence first:
+
+1. Constructor kwargs
+2. Environment variables (prefix ``PHRONEXUS_``; nested groups use ``__``, e.g.
+   ``PHRONEXUS_KAFKA__SASL_PASSWORD``)
+3. ``.env`` file
+4. **Per-subsystem YAML files** in a config directory (``aerospike.yaml``,
+   ``kafka.yaml``, ``iceberg.yaml``, ``api.yaml``, ``observability.yaml``,
+   ``statemachine.yaml``, ``contracts.yaml``, plus a top-level ``phronexus.yaml``)
+
+So operators keep readable, per-subsystem files under version control and
+override individual values with environment variables at deploy time. Secrets
+should never sit in the files: reference them with ``${ENV_VAR}`` or
+``${ENV_VAR:-default}`` placeholders that are interpolated from the environment
+at load time.
+
+Enable file config by pointing ``PHRONEXUS_CONFIG_DIR`` at the directory (or call
+``load_settings("path/to/config")``). When unset, only env/.env/defaults apply,
+so the in-memory dev default is unchanged.
 """
 
 from __future__ import annotations
 
+import os
+import re
+from pathlib import Path
+from typing import Any, Optional
+
+import yaml
 from pydantic import BaseModel, Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+
+# ---------------------------------------------------------------------------
+# Subsystem settings
+# ---------------------------------------------------------------------------
 
 
 class AerospikeSettings(BaseModel):
@@ -17,14 +43,15 @@ class AerospikeSettings(BaseModel):
     contracts_set: str = "_contracts"
     index_set: str = "_inv"
     outbox_set: str = "_outbox"
-    # Security
+    # --- security: TLS / mTLS + auth ---
     tls_enable: bool = False
-    tls_cafile: str | None = None
-    tls_certfile: str | None = None  # client cert for mTLS
-    tls_keyfile: str | None = None
-    tls_name: str | None = None
+    tls_cafile: str | None = None       # CA bundle to verify the cluster
+    tls_certfile: str | None = None     # client certificate -> mTLS
+    tls_keyfile: str | None = None      # client private key -> mTLS
+    tls_name: str | None = None         # TLS name presented by the cluster
     user: str | None = None
     password: str | None = None
+    auth_mode: str = "INTERNAL"         # INTERNAL | EXTERNAL | EXTERNAL_INSECURE | PKI
     # Prefer native multi-record transactions (Aerospike 8.0+) when available.
     use_native_txn: bool = True
 
@@ -34,6 +61,46 @@ class KafkaSettings(BaseModel):
     bootstrap_servers: str = "localhost:9092"
     topic_prefix: str = "phronexus.commits"
     client_id: str = "phronexus-core"
+    # --- security ---
+    # PLAINTEXT | SSL | SASL_SSL | SASL_PLAINTEXT
+    security_protocol: str = "PLAINTEXT"
+    ssl_cafile: str | None = None        # CA bundle to verify brokers
+    ssl_certfile: str | None = None      # client certificate -> mTLS
+    ssl_keyfile: str | None = None       # client private key -> mTLS
+    ssl_key_password: str | None = None
+    ssl_verify: bool = True              # verify broker certificate
+    ssl_endpoint_identification: bool = True  # verify broker hostname
+    sasl_mechanism: str | None = None    # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512 | OAUTHBEARER | GSSAPI
+    sasl_username: str | None = None
+    sasl_password: str | None = None
+
+    def client_config(self) -> dict[str, Any]:
+        """Map to a librdkafka (confluent-kafka) client configuration dict."""
+        cfg: dict[str, Any] = {
+            "bootstrap.servers": self.bootstrap_servers,
+            "client.id": self.client_id,
+            "security.protocol": self.security_protocol,
+        }
+        if self.security_protocol in ("SSL", "SASL_SSL"):
+            if self.ssl_cafile:
+                cfg["ssl.ca.location"] = self.ssl_cafile
+            if self.ssl_certfile:
+                cfg["ssl.certificate.location"] = self.ssl_certfile
+            if self.ssl_keyfile:
+                cfg["ssl.key.location"] = self.ssl_keyfile
+            if self.ssl_key_password:
+                cfg["ssl.key.password"] = self.ssl_key_password
+            cfg["enable.ssl.certificate.verification"] = self.ssl_verify
+            if not self.ssl_endpoint_identification:
+                cfg["ssl.endpoint.identification.algorithm"] = "none"
+        if self.security_protocol in ("SASL_SSL", "SASL_PLAINTEXT"):
+            if self.sasl_mechanism:
+                cfg["sasl.mechanism"] = self.sasl_mechanism
+            if self.sasl_username:
+                cfg["sasl.username"] = self.sasl_username
+            if self.sasl_password:
+                cfg["sasl.password"] = self.sasl_password
+        return cfg
 
 
 class IcebergSettings(BaseModel):
@@ -44,6 +111,44 @@ class IcebergSettings(BaseModel):
     catalog_uri: str = "http://localhost:8181"
     warehouse: str = "s3://phronexus/warehouse"
     batch_size: int = 500
+    # --- REST catalog auth / TLS ---
+    catalog_token: str | None = None         # bearer token for the REST catalog
+    catalog_tls_cafile: str | None = None    # CA bundle to verify the catalog
+    catalog_tls_certfile: str | None = None  # client certificate -> mTLS to catalog
+    catalog_tls_keyfile: str | None = None
+    # --- object store (S3-compatible) ---
+    s3_endpoint: str | None = None
+    s3_region: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    s3_tls_verify: bool = True
+
+    def catalog_properties(self) -> dict[str, Any]:
+        """Build a pyiceberg ``load_catalog`` properties dict.
+
+        Key names follow pyiceberg's REST/S3 FileIO conventions; confirm against
+        the pinned pyiceberg version for a given deployment.
+        """
+        props: dict[str, Any] = {"uri": self.catalog_uri, "warehouse": self.warehouse}
+        if self.catalog_token:
+            props["token"] = self.catalog_token
+        if self.catalog_tls_cafile:
+            props["ssl.cabundle"] = self.catalog_tls_cafile
+        if self.catalog_tls_certfile:
+            props["ssl.client.cert"] = self.catalog_tls_certfile
+        if self.catalog_tls_keyfile:
+            props["ssl.client.key"] = self.catalog_tls_keyfile
+        if self.s3_endpoint:
+            props["s3.endpoint"] = self.s3_endpoint
+        if self.s3_region:
+            props["s3.region"] = self.s3_region
+        if self.s3_access_key_id:
+            props["s3.access-key-id"] = self.s3_access_key_id
+        if self.s3_secret_access_key:
+            props["s3.secret-access-key"] = self.s3_secret_access_key
+        if not self.s3_tls_verify:
+            props["s3.connect.ssl-verify"] = False
+        return props
 
 
 class AuthSettings(BaseModel):
@@ -107,6 +212,83 @@ class ReaperSettings(BaseModel):
     orphan_grace_seconds: int = 300
 
 
+# ---------------------------------------------------------------------------
+# File-based config source (per-subsystem YAML + ${ENV} interpolation)
+# ---------------------------------------------------------------------------
+
+_ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+# top-level scalars live in phronexus.yaml; every other group maps to <group>.yaml
+_GROUP_FILES = {
+    "aerospike": "aerospike.yaml",
+    "kafka": "kafka.yaml",
+    "iceberg": "iceberg.yaml",
+    "api": "api.yaml",
+    "observability": "observability.yaml",
+    "contracts": "contracts.yaml",
+    "statemachine": "statemachine.yaml",
+    "reaper": "reaper.yaml",
+}
+
+# Set by load_settings(); read by the settings source.
+_CONFIG_DIR_OVERRIDE: Optional[str] = None
+
+
+def _interpolate(value: Any) -> Any:
+    """Recursively replace ``${VAR}`` / ``${VAR:-default}`` from the environment."""
+    if isinstance(value, str):
+        def sub(m: re.Match) -> str:
+            var, default = m.group(1), m.group(2)
+            return os.environ.get(var, default if default is not None else "")
+        return _ENV_RE.sub(sub, value)
+    if isinstance(value, dict):
+        return {k: _interpolate(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_interpolate(v) for v in value]
+    return value
+
+
+def _load_yaml(path: Path) -> dict[str, Any]:
+    data = yaml.safe_load(path.read_text()) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"config file {path} must contain a mapping")
+    return _interpolate(data)
+
+
+class FileConfigSource(PydanticBaseSettingsSource):
+    """Loads per-subsystem YAML files from a config directory."""
+
+    def __init__(self, settings_cls, config_dir: Optional[str]):
+        super().__init__(settings_cls)
+        self._data: dict[str, Any] = {}
+        if config_dir:
+            self._data = self._load(Path(config_dir))
+
+    def _load(self, root: Path) -> dict[str, Any]:
+        if not root.is_dir():
+            return {}
+        data: dict[str, Any] = {}
+        top = root / "phronexus.yaml"
+        if top.exists():
+            data.update(_load_yaml(top))
+        for group, fname in _GROUP_FILES.items():
+            fp = root / fname
+            if fp.exists():
+                data[group] = _load_yaml(fp)
+        return data
+
+    def get_field_value(self, field, field_name):  # pragma: no cover - unused
+        return None, field_name, False
+
+    def __call__(self) -> dict[str, Any]:
+        return self._data
+
+
+# ---------------------------------------------------------------------------
+# Root settings
+# ---------------------------------------------------------------------------
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="PHRONEXUS_",
@@ -127,6 +309,38 @@ class Settings(BaseSettings):
     reaper: ReaperSettings = Field(default_factory=ReaperSettings)
     statemachine: StateMachineSettings = Field(default_factory=StateMachineSettings)
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls,
+        init_settings,
+        env_settings,
+        dotenv_settings,
+        file_secret_settings,
+    ):
+        config_dir = _CONFIG_DIR_OVERRIDE or os.environ.get("PHRONEXUS_CONFIG_DIR")
+        # Precedence (first wins): init > env > .env > YAML files > file secrets.
+        return (
+            init_settings,
+            env_settings,
+            dotenv_settings,
+            FileConfigSource(settings_cls, config_dir),
+            file_secret_settings,
+        )
+
     @property
     def namespace(self) -> str:
         return self.aerospike.namespace
+
+
+def load_settings(config_dir: Optional[str] = None) -> Settings:
+    """Load settings, optionally from a directory of per-subsystem YAML files.
+
+    Environment variables still override file values.
+    """
+    global _CONFIG_DIR_OVERRIDE
+    _CONFIG_DIR_OVERRIDE = config_dir
+    try:
+        return Settings()
+    finally:
+        _CONFIG_DIR_OVERRIDE = None

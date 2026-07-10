@@ -26,9 +26,8 @@ class KafkaSink(EventSink):  # pragma: no cover - needs a broker
                 "pip install 'phronexus-core[kafka]'"
             )
         self.cfg = cfg
-        self._producer = Producer(
-            {"bootstrap.servers": cfg.bootstrap_servers, "client.id": cfg.client_id}
-        )
+        # client_config() carries TLS/mTLS + SASL from settings.
+        self._producer = Producer(cfg.client_config())
 
     def emit(self, event: CommitEvent) -> None:
         topic = f"{self.cfg.topic_prefix}.{event.entity}"

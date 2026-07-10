@@ -1,0 +1,9 @@
+# Observability — structured logging + OpenTelemetry.
+# Maps to phronexus.config.ObservabilitySettings.
+
+service_name: phronexus-core
+log_level: "${LOG_LEVEL:-INFO}"
+log_json: true
+metrics_enabled: true
+otel_enabled: true
+otel_endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4317}"
