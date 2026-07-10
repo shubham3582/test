@@ -1,0 +1,29 @@
+# Trade lifecycle as a metadata-driven state machine.
+# Onboarding a new lifecycle = adding this file, no code.
+kind: transition
+entity: trade
+version: 1
+state_field: status
+inputs: ["kafka://trades.events"]
+transitions:
+  - event: TradeBooked
+    from: null            # no existing document -> creation
+    to: booked
+    emit:
+      - {topic: "kafka://trades.booked", type: TradeBooked}
+  - event: TradeConfirmed
+    from: booked
+    to: confirmed
+    emit:
+      - {topic: "kafka://settlement.requests", type: SettlementRequested}
+  - event: TradeSettled
+    from: confirmed
+    to: settled
+    guard: "notional > 0"
+    emit:
+      - {topic: "kafka://trades.settled", type: TradeSettled}
+  - event: TradeCancelled
+    from: "*"             # cancel from any state
+    to: cancelled
+    emit:
+      - {topic: "kafka://trades.cancelled", type: TradeCancelled}

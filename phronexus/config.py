@@ -91,6 +91,16 @@ class ContractSettings(BaseModel):
     background_refresh: bool = False
 
 
+class StateMachineSettings(BaseModel):
+    # Sets backing the transactional outbox and the input-dedup markers.
+    outbox_set: str = "_sm_outbox"
+    dedup_set: str = "_sm_dedup"
+    dedup_ttl: int = 604800  # 7 days; markers past redelivery windows can expire
+    # Kafka topic the autonomous runner consumes domain events from (if wired).
+    input_topics: list[str] = Field(default_factory=list)
+    consumer_group: str = "phronexus-statemachine"
+
+
 class ReaperSettings(BaseModel):
     enabled: bool = False
     interval_seconds: int = 60
@@ -115,6 +125,7 @@ class Settings(BaseSettings):
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     contracts: ContractSettings = Field(default_factory=ContractSettings)
     reaper: ReaperSettings = Field(default_factory=ReaperSettings)
+    statemachine: StateMachineSettings = Field(default_factory=StateMachineSettings)
 
     @property
     def namespace(self) -> str:

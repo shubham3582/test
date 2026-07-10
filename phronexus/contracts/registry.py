@@ -20,7 +20,12 @@ from typing import Optional
 import structlog
 
 from phronexus.contracts.loader import Contract, parse_contract
-from phronexus.contracts.models import QueryContract, StorageContract, ViewContract
+from phronexus.contracts.models import (
+    QueryContract,
+    StorageContract,
+    TransitionContract,
+    ViewContract,
+)
 from phronexus.errors import ContractNotFound
 from phronexus.kv.base import KVStore
 
@@ -78,6 +83,9 @@ class ContractRegistry:
 
     def active_view(self, entity: str, view: str) -> ViewContract:
         return self._active_of("view", entity, view)  # type: ignore[return-value]
+
+    def active_transition(self, entity: str) -> TransitionContract:
+        return self._active_of("transition", entity)  # type: ignore[return-value]
 
     def get_version(self, identity: str) -> Contract:
         self._maybe_refresh()

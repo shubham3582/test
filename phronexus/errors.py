@@ -81,6 +81,20 @@ class QueryError(PhronexusError):
     http_status = 400
 
 
+# --- state machine -------------------------------------------------------
+
+class TransitionRejected(PhronexusError):
+    """No valid transition for the (event_type, current_state) pair, or a guard failed."""
+
+    code = "transition_rejected"
+    http_status = 409
+
+
+class GuardError(PhronexusError):
+    code = "guard_error"
+    http_status = 400
+
+
 class ViewError(PhronexusError):
     code = "view_error"
     http_status = 400

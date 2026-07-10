@@ -43,6 +43,7 @@ last**. The manifest is the single commit point:
 | **storage** | primary key, projections across sets, update/delete policy, TTL, Iceberg retention | `contracts_examples/trade.storage.yaml` |
 | **query** | searchable fields, index types, named query patterns | `contracts_examples/trade.query.yaml` |
 | **view** | consumer output: field allow-list, masking, transforms | `contracts_examples/trade.view.*.yaml` |
+| **transition** | state-machine lifecycle: states, guards, emitted events | `contracts_examples/trade.transition.yaml` |
 
 Contracts are versioned and stored in the `_contracts` set. An in-process cache
 refreshes on a configurable cadence (default **300s**), so publishing a new
@@ -156,6 +157,27 @@ PHRONEXUS_BACKEND=aerospike PHRONEXUS_KAFKA__ENABLED=true \
   python -m phronexus.retention.main
 ```
 
+## Transactional state machine (optional face)
+
+Phronexus can also run as an **autonomous, event-driven state machine**: consume a
+domain event, load the entity's current state, evaluate a metadata-driven
+**transition contract**, and *atomically* persist the new state, enqueue output
+events, and record a dedup marker — in one Aerospike transaction — then relay the
+outbox to Kafka. The guarantee is **atomic durable transition + effectively-once
+emission** (transactional outbox + idempotent writes + input dedup), the strongest
+this class of system can give without literal 2PC.
+
+```python
+sm = px.state_machine(output=publisher)
+sm.process(InputEvent(entity="trade", event_type="TradeConfirmed",
+                      key="T-1", payload={}, event_id="evt-123"))
+```
+
+One engine, two faces: an autonomous service (`python -m phronexus.statemachine.runner`)
+and an embedded DishtaYantra `CalculationNode` (`PhronexusStateMachineNode`). See
+[`docs/state-machine.md`](docs/state-machine.md) and the DAG integration in
+[`docs/integration-dishtayantra.md`](docs/integration-dishtayantra.md).
+
 ## Operations
 
 **Contract backfill** — after a contract evolves (new projection / searchable
@@ -203,6 +225,7 @@ phronexus/
   api/                 # FastAPI app, routers, auth, middleware, server
   sdk/                 # PhronexusClient (remote HTTP SDK)
   retention/           # change-feed source, warehouse, Iceberg worker
+  statemachine/        # transactional state machine (processor, I/O, node, runner)
   admin/               # contract backfill job
   cli.py               # phronexus admin CLI
   core.py              # Phronexus facade (in-process SDK entrypoint)

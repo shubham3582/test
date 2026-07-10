@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import structlog
@@ -47,6 +48,20 @@ STATUS_COMMITTED = "committed"
 STATUS_DELETED = "deleted"
 
 
+@dataclass
+class StagedWrite:
+    """Everything :meth:`ManifestManager.post_write` needs after a staged commit."""
+
+    entity: str
+    doc_id: str
+    txn_id: str
+    sc: Any
+    records: list
+    old_data: dict
+    existing: Any
+    ts: float
+
+
 class ManifestManager:
     def __init__(
         self,
@@ -69,52 +84,69 @@ class ManifestManager:
         with self._tel.span("manifest.write", entity=entity), self._tel.timed(
             "phronexus.write.latency", entity=entity
         ):
-            sc = self._registry.active_storage(entity)
-            doc_id = self._proj.compute_doc_id(sc, document)
-            txn_id = uuid.uuid4().hex
-
-            existing = self._store.get(sc.manifest_set, doc_id)
-            prev_committed = existing is not None and existing.bins.get(M_STATUS) == STATUS_COMMITTED
-            if sc.update_policy == UpdatePolicy.insert_only and prev_committed:
-                raise DocumentAlreadyExists(f"{entity}/{doc_id} already exists")
-
-            old_data = self._read_canonical_data(existing)
-            records = self._proj.build(sc, document, doc_id=doc_id, txn_id=txn_id)
-            canonical = next(r for r in records if r.projection.canonical)
-
-            manifest_bins = {
-                M_STATUS: STATUS_COMMITTED,
-                M_TXN: txn_id,
-                M_CVER: sc.version,
-                M_DOC_ID: doc_id,
-                M_CANONICAL: {"set": canonical.projection.set, "key": canonical.key},
-                M_PROJECTIONS: [{"set": r.projection.set, "key": r.key} for r in records],
-                M_TS: time.time(),
-                M_PREV_TXN: existing.bins.get(M_TXN) if existing else None,
-            }
-            expected_gen = existing.generation if existing else 0
-
-            # Projections first, manifest last — atomically.
+            # Stage the projections + manifest into one transaction, commit, then
+            # run post-commit side effects (index, reap, change-feed emit).
             with self._store.transaction() as txn:
-                for r in records:
-                    self._store.put(r.projection.set, r.key, r.bins, ttl=r.ttl, txn=txn)
-                self._store.put(
-                    sc.manifest_set, doc_id, manifest_bins,
-                    expected_generation=expected_gen, txn=txn,
-                )
+                staged = self.stage_write(entity, document, txn)
+            self.post_write(staged, document)
+            return staged.doc_id
 
-            self._tel.incr("phronexus.writes", entity=entity)
-            self._reindex(entity, doc_id, old_data, document)
-            self._reap_superseded(existing, records, sc)
-            self._sink.emit(
-                CommitEvent(
-                    entity=entity, doc_id=doc_id, txn_id=txn_id,
-                    contract_version=sc.version, op="upsert",
-                    ts=manifest_bins[M_TS], document=dict(document),
-                )
+    def stage_write(self, entity: str, document: dict[str, Any], txn) -> "StagedWrite":
+        """Stage projections + manifest into ``txn`` without committing.
+
+        Exposed so a caller (e.g. the state-machine processor) can compose a
+        document write with additional records — outbox events, dedup markers —
+        in a single atomic transaction. Call :meth:`post_write` after commit.
+        """
+        sc = self._registry.active_storage(entity)
+        doc_id = self._proj.compute_doc_id(sc, document)
+        txn_id = uuid.uuid4().hex
+
+        existing = self._store.get(sc.manifest_set, doc_id)
+        prev_committed = existing is not None and existing.bins.get(M_STATUS) == STATUS_COMMITTED
+        if sc.update_policy == UpdatePolicy.insert_only and prev_committed:
+            raise DocumentAlreadyExists(f"{entity}/{doc_id} already exists")
+
+        old_data = self._read_canonical_data(existing)
+        records = self._proj.build(sc, document, doc_id=doc_id, txn_id=txn_id)
+        canonical = next(r for r in records if r.projection.canonical)
+        ts = time.time()
+
+        manifest_bins = {
+            M_STATUS: STATUS_COMMITTED,
+            M_TXN: txn_id,
+            M_CVER: sc.version,
+            M_DOC_ID: doc_id,
+            M_CANONICAL: {"set": canonical.projection.set, "key": canonical.key},
+            M_PROJECTIONS: [{"set": r.projection.set, "key": r.key} for r in records],
+            M_TS: ts,
+            M_PREV_TXN: existing.bins.get(M_TXN) if existing else None,
+        }
+        expected_gen = existing.generation if existing else 0
+
+        for r in records:
+            self._store.put(r.projection.set, r.key, r.bins, ttl=r.ttl, txn=txn)
+        self._store.put(
+            sc.manifest_set, doc_id, manifest_bins, expected_generation=expected_gen, txn=txn
+        )
+        return StagedWrite(
+            entity=entity, doc_id=doc_id, txn_id=txn_id, sc=sc,
+            records=records, old_data=old_data, existing=existing, ts=ts,
+        )
+
+    def post_write(self, staged: "StagedWrite", document: dict[str, Any]) -> None:
+        """Post-commit side effects for a staged write."""
+        self._tel.incr("phronexus.writes", entity=staged.entity)
+        self._reindex(staged.entity, staged.doc_id, staged.old_data, document)
+        self._reap_superseded(staged.existing, staged.records, staged.sc)
+        self._sink.emit(
+            CommitEvent(
+                entity=staged.entity, doc_id=staged.doc_id, txn_id=staged.txn_id,
+                contract_version=staged.sc.version, op="upsert",
+                ts=staged.ts, document=dict(document),
             )
-            log.info("document.committed", entity=entity, doc_id=doc_id, txn=txn_id)
-            return doc_id
+        )
+        log.info("document.committed", entity=staged.entity, doc_id=staged.doc_id, txn=staged.txn_id)
 
     # --- read -----------------------------------------------------------
 

@@ -36,6 +36,7 @@ class ContractKind(str, Enum):
     storage = "storage"
     query = "query"
     view = "view"
+    transition = "transition"
 
 
 class _Base(BaseModel):
@@ -193,3 +194,54 @@ class ViewContract(_Base):
 
     def identity(self) -> str:
         return f"view:{self.entity}:{self.view}:v{self.version}"
+
+
+# --- transition contract (state machine) --------------------------------
+
+class EmitSpec(_Base):
+    topic: str                       # output destination, e.g. "kafka://trades.booked"
+    type: Optional[str] = None       # output event type; defaults to the transition's `on`
+
+
+class Transition(_Base):
+    # Input event type that triggers this transition. Named ``event`` (not ``on``)
+    # because YAML 1.1 parses a bare ``on:`` key as the boolean True.
+    event: str
+    # source state; None matches "no existing document" (creation), "*" matches any.
+    from_: Optional[str] = Field(default=None, alias="from")
+    to: str                          # target state written into state_field
+    guard: Optional[str] = None      # safe boolean expression over the candidate doc
+    emit: list[EmitSpec] = Field(default_factory=list)
+
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
+
+class TransitionContract(_Base):
+    kind: Literal[ContractKind.transition] = ContractKind.transition
+    entity: str
+    version: int
+    state_field: str = "status"
+    inputs: list[str] = Field(default_factory=list)  # informational: input topics
+    transitions: list[Transition]
+
+    @model_validator(mode="after")
+    def _validate(self) -> "TransitionContract":
+        if not self.transitions:
+            raise ValueError("a transition contract needs at least one transition")
+        return self
+
+    def match(self, event_type: str, current_state: Optional[str]) -> Optional[Transition]:
+        """Find the transition for an event type given the current state."""
+        for t in self.transitions:
+            if t.event != event_type:
+                continue
+            if t.from_ == "*":
+                return t
+            if t.from_ is None and current_state is None:
+                return t
+            if t.from_ == current_state:
+                return t
+        return None
+
+    def identity(self) -> str:
+        return f"transition:{self.entity}:v{self.version}"

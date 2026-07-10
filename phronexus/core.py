@@ -100,6 +100,14 @@ class Phronexus:
     def query_view(self, entity: str, view: str, query: QueryDoc | dict) -> list[dict[str, Any]]:
         return self.view_engine.apply_many(entity, view, self.query(query))
 
+    # --- state machine --------------------------------------------------
+
+    def state_machine(self, output=None):
+        """Build a transactional state-machine processor over this instance."""
+        from phronexus.statemachine.machine import build_state_machine
+
+        return build_state_machine(self, output=output)
+
     # --- lifecycle ------------------------------------------------------
 
     def close(self) -> None:
