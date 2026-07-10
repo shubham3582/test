@@ -20,7 +20,7 @@ log = structlog.get_logger("phronexus.statemachine")
 def run(px: Phronexus, source, machine: StateMachine, *, batch_size: int = 100,
         max_batches: int | None = None) -> dict[str, int]:
     """Drive the consume→transition→relay loop. Returns a status tally."""
-    tally = {"applied": 0, "duplicate": 0, "rejected": 0}
+    tally = {"applied": 0, "duplicate": 0, "rejected": 0, "dropped": 0}
     batches = 0
     while max_batches is None or batches < max_batches:
         events = source.poll(batch_size)

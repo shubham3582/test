@@ -12,6 +12,7 @@ import json
 from typing import Optional
 
 from phronexus.config import KafkaSettings
+from phronexus.errors import ConfigError
 from phronexus.statemachine.models import InputEvent, OutputEvent
 
 
@@ -86,11 +87,103 @@ class MemoryOutputPublisher(OutputPublisher):
         self.events.append(event)
 
 
+class NullOutputPublisher(OutputPublisher):
+    """Drops output — for consumer-only topologies (or `null://` emit targets)."""
+
+    def publish(self, event: OutputEvent) -> None:
+        return None
+
+
+class HttpOutputPublisher(OutputPublisher):
+    """POSTs the event JSON to its ``http(s)://`` topic URL (TLS/mTLS capable).
+
+    A non-2xx response raises, so the event stays in the outbox for retry
+    (at-least-once). Requires httpx (the 'client' extra).
+    """
+
+    def __init__(
+        self,
+        *,
+        timeout: float = 5.0,
+        verify: bool | str = True,                 # True or a CA bundle path
+        cert: Optional[tuple[str, str]] = None,    # (client_cert, client_key) -> mTLS
+        headers: Optional[dict[str, str]] = None,
+    ):
+        try:
+            import httpx
+        except ImportError as exc:  # pragma: no cover
+            raise ConfigError("HttpOutputPublisher requires httpx: pip install 'phronexus-core[client]'") from exc
+        self._client = httpx.Client(timeout=timeout, verify=verify, cert=cert, headers=headers or {})
+
+    def publish(self, event: OutputEvent) -> None:
+        resp = self._client.post(event.topic, json=event.to_dict())
+        resp.raise_for_status()
+
+    def close(self) -> None:
+        self._client.close()
+
+
+class RoutingOutputPublisher(OutputPublisher):
+    """Dispatches each event to a publisher by its topic URI scheme.
+
+        kafka://…        -> Kafka/MSK
+        http:// https:// -> HttpOutputPublisher
+        null://          -> dropped
+        (bare name)      -> the default publisher (treated as a Kafka topic)
+    """
+
+    def __init__(self, routes: dict[str, OutputPublisher], default: Optional[OutputPublisher] = None):
+        self._routes = routes
+        self._default = default
+
+    def publish(self, event: OutputEvent) -> None:
+        scheme = event.topic.split("://", 1)[0] if "://" in event.topic else "kafka"
+        pub = self._routes.get(scheme, self._default)
+        if pub is None:
+            raise ConfigError(f"no output route for scheme {scheme!r} (topic {event.topic!r})")
+        pub.publish(event)
+
+    def close(self) -> None:
+        for pub in {id(p): p for p in [*self._routes.values(), self._default] if p}.values():
+            pub.close()
+
+
 def build_output_publisher(settings) -> "OutputPublisher":
-    """Kafka publisher when the change-feed is enabled, else an in-memory one."""
+    """Build a scheme-routing publisher from settings.
+
+    Routes ``http(s)://`` to an HttpOutputPublisher and ``null://`` to a drop.
+    ``kafka://`` (and bare topic names) go to Kafka when enabled, otherwise to an
+    in-memory publisher (so tests/dev capture them). This is what lets one state
+    machine emit to Kafka, HTTP, or nowhere — per transition.
+    """
+    sm = settings.statemachine
+    routes: dict[str, OutputPublisher] = {"null": NullOutputPublisher()}
+
+    http = HttpOutputPublisher(
+        timeout=sm.http_timeout,
+        verify=(sm.http_tls_cafile or True),
+        cert=((sm.http_tls_certfile, sm.http_tls_keyfile)
+              if sm.http_tls_certfile and sm.http_tls_keyfile else None),
+        headers=sm.http_headers or None,
+    ) if _httpx_available() else None
+    if http is not None:
+        routes["http"] = http
+        routes["https"] = http
+
     if settings.kafka.enabled:
-        return KafkaOutputPublisher(settings.kafka)
-    return MemoryOutputPublisher()
+        routes["kafka"] = KafkaOutputPublisher(settings.kafka)
+        default = None
+    else:
+        default = MemoryOutputPublisher()  # captures kafka:// in tests/dev
+    return RoutingOutputPublisher(routes, default=default)
+
+
+def _httpx_available() -> bool:
+    try:
+        import httpx  # noqa: F401
+        return True
+    except ImportError:  # pragma: no cover
+        return False
 
 
 class KafkaOutputPublisher(OutputPublisher):  # pragma: no cover - needs a broker

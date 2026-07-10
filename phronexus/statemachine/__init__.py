@@ -13,6 +13,14 @@ The same processor also backs a DishtaYantra node adapter (see ``node``), so the
 one engine has two faces: standalone service and embedded DAG node.
 """
 
+from phronexus.statemachine.hooks import ProcessingHook, TransitionContext
+from phronexus.statemachine.io import (
+    HttpOutputPublisher,
+    MemoryOutputPublisher,
+    NullOutputPublisher,
+    RoutingOutputPublisher,
+    build_output_publisher,
+)
 from phronexus.statemachine.machine import StateMachine, build_state_machine
 from phronexus.statemachine.models import InputEvent, OutputEvent, ProcessResult
 
@@ -22,4 +30,11 @@ __all__ = [
     "InputEvent",
     "OutputEvent",
     "ProcessResult",
+    "ProcessingHook",
+    "TransitionContext",
+    "HttpOutputPublisher",
+    "MemoryOutputPublisher",
+    "NullOutputPublisher",
+    "RoutingOutputPublisher",
+    "build_output_publisher",
 ]

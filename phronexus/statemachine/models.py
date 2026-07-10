@@ -45,7 +45,7 @@ class OutputEvent:
 
 @dataclass
 class ProcessResult:
-    status: Literal["applied", "duplicate", "rejected"]
+    status: Literal["applied", "duplicate", "rejected", "dropped"]
     doc_id: Optional[str] = None
     from_state: Optional[str] = None
     to_state: Optional[str] = None

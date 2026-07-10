@@ -236,6 +236,12 @@ class StateMachineSettings(BaseModel):
     # Kafka topic the autonomous runner consumes domain events from (if wired).
     input_topics: list[str] = Field(default_factory=list)
     consumer_group: str = "phronexus-statemachine"
+    # HTTP output publisher (for http(s):// emit targets) — TLS/mTLS + headers.
+    http_timeout: float = 5.0
+    http_tls_cafile: str | None = None
+    http_tls_certfile: str | None = None    # client cert -> mTLS
+    http_tls_keyfile: str | None = None
+    http_headers: dict[str, str] = Field(default_factory=dict)
 
 
 class ReaperSettings(BaseModel):

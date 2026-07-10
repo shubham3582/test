@@ -102,11 +102,11 @@ class Phronexus:
 
     # --- state machine --------------------------------------------------
 
-    def state_machine(self, output=None):
+    def state_machine(self, output=None, hooks=None):
         """Build a transactional state-machine processor over this instance."""
         from phronexus.statemachine.machine import build_state_machine
 
-        return build_state_machine(self, output=output)
+        return build_state_machine(self, output=output, hooks=hooks)
 
     # --- lifecycle ------------------------------------------------------
 

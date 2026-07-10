@@ -17,8 +17,9 @@ from typing import Optional
 import structlog
 
 from phronexus.config import StateMachineSettings
-from phronexus.errors import DocumentAlreadyExists
+from phronexus.errors import DocumentAlreadyExists, TransitionRejected
 from phronexus.statemachine.guard import safe_eval
+from phronexus.statemachine.hooks import TransitionContext
 from phronexus.statemachine.io import MemoryOutputPublisher, OutputPublisher
 from phronexus.statemachine.models import InputEvent, OutputEvent, ProcessResult
 
@@ -27,13 +28,15 @@ log = structlog.get_logger(__name__)
 
 class StateMachine:
     def __init__(self, px, output: Optional[OutputPublisher] = None,
-                 settings: Optional[StateMachineSettings] = None):
+                 settings: Optional[StateMachineSettings] = None,
+                 hooks: Optional[list] = None):
         self._px = px
         self._store = px.store
         self._registry = px.registry
         self._manifest = px.manifest
         self._out = output or MemoryOutputPublisher()
         self._cfg = settings or px.settings.statemachine
+        self._hooks = list(hooks or [])
 
     @property
     def output(self) -> OutputPublisher:
@@ -50,7 +53,15 @@ class StateMachine:
                 self._px.telemetry.incr("phronexus.sm.duplicates", entity=event.entity)
                 return ProcessResult(status="duplicate", reason="event already processed")
 
-            # 2) Load current state and resolve the transition.
+            # 2) HOOK on_event — custom code after consume, before the transition.
+            #    A hook returning None drops the event (ack + skip, not retried).
+            for h in self._hooks:
+                event = h.on_event(event)
+                if event is None:
+                    self._px.telemetry.incr("phronexus.sm.dropped", entity=event.entity if event else "?")
+                    return ProcessResult(status="dropped", reason="dropped by hook")
+
+            # 3) Load current state and resolve the transition.
             current = self._manifest.read(event.entity, event.key)
             cur_state = current.get(tc.state_field) if current else None
             tr = tc.match(event.event_type, cur_state)
@@ -61,8 +72,24 @@ class StateMachine:
                     reason=f"no transition for event={event.event_type!r} state={cur_state!r}",
                 )
 
-            # 3) Build the candidate document and evaluate the guard.
+            # 4) Build the candidate document.
             new_doc = {**(current or {}), **event.payload, tc.state_field: tr.to}
+
+            # 5) HOOK on_transition — enrich/validate before commit; may reject.
+            ctx = TransitionContext(
+                event=event, contract=tc, transition=tr, current=current, new_doc=new_doc,
+            )
+            try:
+                for h in self._hooks:
+                    h.on_transition(ctx)
+            except TransitionRejected as exc:
+                self._px.telemetry.incr("phronexus.sm.rejected", entity=event.entity)
+                return ProcessResult(
+                    status="rejected", from_state=cur_state, to_state=tr.to, reason=str(exc),
+                )
+            new_doc = ctx.new_doc
+
+            # 6) Evaluate the guard on the (possibly enriched) candidate.
             if tr.guard and not safe_eval(tr.guard, new_doc):
                 self._px.telemetry.incr("phronexus.sm.rejected", entity=event.entity)
                 return ProcessResult(
@@ -94,18 +121,22 @@ class StateMachine:
             except DocumentAlreadyExists:
                 return ProcessResult(status="rejected", reason="insert_only violation")
 
-            # 5) Post-commit side effects + relay the outbox.
+            # 7) Post-commit side effects + relay the outbox.
             self._manifest.post_write(staged, new_doc)
             self._px.telemetry.incr("phronexus.sm.applied", entity=event.entity)
+            result = ProcessResult(
+                status="applied", doc_id=staged.doc_id, from_state=cur_state,
+                to_state=tr.to, emitted=[o.topic for o in outs],
+            )
+            # HOOK on_committed — post-commit effects, around the outbox relay.
+            for h in self._hooks:
+                h.on_committed(event, result)
             self.drain_outbox()
             log.info(
                 "statemachine.transition", entity=event.entity, doc_id=staged.doc_id,
                 **{"from": cur_state}, to=tr.to, emitted=[o.topic for o in outs],
             )
-            return ProcessResult(
-                status="applied", doc_id=staged.doc_id, from_state=cur_state,
-                to_state=tr.to, emitted=[o.topic for o in outs],
-            )
+            return result
 
     # --- outbox relay ---------------------------------------------------
 
@@ -129,5 +160,6 @@ class StateMachine:
         return published
 
 
-def build_state_machine(px, output: Optional[OutputPublisher] = None) -> StateMachine:
-    return StateMachine(px, output=output)
+def build_state_machine(px, output: Optional[OutputPublisher] = None,
+                        hooks: Optional[list] = None) -> StateMachine:
+    return StateMachine(px, output=output, hooks=hooks)

@@ -101,6 +101,37 @@ auditable); as a node it rides a DishtaYantra DAG with in-process latency. Pick
 per flow — for settlement/lifecycle correctness the service face usually wins;
 for microsecond enrichment the node face does.
 
+## Extensibility: hooks and output routing
+
+**Custom code between consume and commit** — register `ProcessingHook`s (they run
+for all three faces because they live in `process()`):
+
+| Hook | When | Use |
+|---|---|---|
+| `on_event(event)` | after consume, before the transition | enrich / validate / transform; return a modified event, or `None` to **drop** (ack + skip, not retried) |
+| `on_transition(ctx)` | transition matched, **before commit** | mutate `ctx.new_doc` (enrichment), or raise `TransitionRejected` to reject (retryable) |
+| `on_committed(event, result)` | after commit, around the relay | audit, metrics, side effects |
+
+Rule: any I/O (reference-data lookup, HTTP enrichment) goes in `on_event` /
+`on_transition` — *before* the transaction — to keep the store transaction tight.
+
+```python
+sm = px.state_machine(hooks=[EnrichHook(), ValidateHook()])
+```
+
+**Flexible input/output topologies** — input (`InputSource`) and output
+(`OutputPublisher`) are pluggable, and emit targets are URIs, so `RoutingOutputPublisher`
+dispatches by scheme:
+
+| `emit` target | Goes to |
+|---|---|
+| `kafka://topic` | Kafka / MSK |
+| `http(s)://host/path` | `HttpOutputPublisher` (POST, TLS/mTLS) |
+| `null://` or empty `emit` | dropped — **consumer-only** |
+
+A single transition can mix them (some events to Kafka, some to a webhook, some
+silent). Failed HTTP/Kafka publishes stay in the outbox for retry (at-least-once).
+
 ## What it reuses vs. adds
 
 **Reuses:** manifest + native transaction (the atomic core), the `_outbox`/change-
