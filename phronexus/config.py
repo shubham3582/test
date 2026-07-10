@@ -42,6 +42,34 @@ class IcebergSettings(BaseModel):
     warehouse: str = "s3://phronexus/warehouse"
 
 
+class AuthSettings(BaseModel):
+    # Any subset of: "none", "api_key", "bearer", "mtls". Tried in order; the
+    # first that produces a principal wins. Default is open (dev only).
+    schemes: list[str] = Field(default_factory=lambda: ["none"])
+    api_key_header: str = "X-API-Key"
+    # key -> principal name. In production store hashes, not raw keys.
+    api_keys: dict[str, str] = Field(default_factory=dict)
+    # opaque bearer token -> principal name (prototype; swap for JWT verify).
+    bearer_tokens: dict[str, str] = Field(default_factory=dict)
+    # Header a trusted TLS-terminating proxy uses to forward the client-cert CN.
+    mtls_cn_header: str = "X-Client-Cert-CN"
+    # Optional CN allow-list -> principal; empty means "any presented CN".
+    mtls_allowed_cns: dict[str, str] = Field(default_factory=dict)
+    # Principals allowed to hit contract-admin endpoints; empty means all.
+    admin_principals: list[str] = Field(default_factory=list)
+
+
+class ApiSettings(BaseModel):
+    host: str = "0.0.0.0"
+    port: int = 8080
+    # Server-side TLS / mTLS (uvicorn). Terminate at a proxy instead if preferred.
+    tls_certfile: str | None = None
+    tls_keyfile: str | None = None
+    tls_ca_certs: str | None = None  # set to require client certs (mTLS)
+    require_client_cert: bool = False
+    auth: AuthSettings = Field(default_factory=AuthSettings)
+
+
 class ObservabilitySettings(BaseModel):
     service_name: str = "phronexus-core"
     log_level: str = "INFO"
@@ -77,6 +105,7 @@ class Settings(BaseSettings):
     backend: str = "memory"
 
     aerospike: AerospikeSettings = Field(default_factory=AerospikeSettings)
+    api: ApiSettings = Field(default_factory=ApiSettings)
     kafka: KafkaSettings = Field(default_factory=KafkaSettings)
     iceberg: IcebergSettings = Field(default_factory=IcebergSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)

@@ -12,9 +12,10 @@ contracts** that live in the datastore and hot-reload, so new business entities
 - **Change feed:** Kafka / Redpanda
 - **Interfaces:** Python SDK + REST (REST is *Phase 3*)
 
-> **Status:** Phases 0–2 complete — contracts, write/read via the manifest
-> pattern, config-driven inverted-index search, and consumer views. Runs today
-> on a built-in in-memory backend (no services required) and on Aerospike.
+> **Status:** Phases 0–3 complete — contracts, write/read via the manifest
+> pattern, config-driven inverted-index search, consumer views, and a REST API
+> + remote SDK with API-key/bearer/mTLS auth. Runs today on a built-in
+> in-memory backend (no services required) and on Aerospike.
 
 ---
 
@@ -96,6 +97,42 @@ Drop a `storage` (and optional `query`/`view`) contract into a directory and
 `load_contract_dir`. See `fx_spot.*.yaml` and `repo.storage.yaml` — no code
 changes to store, search, or serve a brand-new entity.
 
+## REST API & remote SDK
+
+The same core is exposed over HTTP. `Phronexus` is the in-process SDK;
+`PhronexusClient` is the remote one — application code reads the same either way.
+
+```bash
+pip install -e '.[api,client]'
+PHRONEXUS_BACKEND=memory python -m phronexus.api.server   # serves on :8080
+```
+
+| Method & path | Purpose |
+|---|---|
+| `PUT /entities/{entity}/documents` | write (manifest commit) |
+| `GET /entities/{entity}/documents/{id}` | read by primary key |
+| `DELETE /entities/{entity}/documents/{id}` | delete (per contract policy) |
+| `POST /entities/{entity}/query?view=` | JSON query (optionally through a view) |
+| `POST /entities/{entity}/patterns/{name}` | named parameterised query |
+| `GET /entities/{entity}/views/{view}/documents/{id}` | read through a view |
+| `POST /contracts` · `POST /contracts/refresh` | contract admin (admin principal) |
+| `GET /healthz` · `GET /readyz` | liveness / readiness |
+
+```python
+from phronexus.sdk import PhronexusClient
+
+c = PhronexusClient("https://phronexus.internal:8080", api_key="…")
+c.put("trade", {...})
+c.query("trade", [{"field": "counterparty", "op": "eq", "value": "GS"}], view="public")
+```
+
+**Auth** is pluggable and configured centrally (`PHRONEXUS_API__AUTH__*`): any subset of
+`none` / `api_key` / `bearer` / `mtls`, tried in order. mTLS reads the client-cert
+CN from a trusted proxy header (or the TLS transport). Contract-admin endpoints
+additionally require an admin principal. Every request gets a bound `request_id`
+in the structured logs and an `X-Request-ID` response header; OTel FastAPI
+instrumentation attaches when `OTEL_ENABLED=true`.
+
 ## Running against real infrastructure
 
 ```bash
@@ -121,12 +158,14 @@ phronexus/
   views/               # consumer view projection (allow-list, mask, transform)
   events/              # change-feed sinks (memory, kafka)
   observability/       # structured logging + OTel telemetry
-  core.py              # Phronexus facade (SDK entrypoint)
+  api/                 # FastAPI app, routers, auth, middleware, server
+  sdk/                 # PhronexusClient (remote HTTP SDK)
+  core.py              # Phronexus facade (in-process SDK entrypoint)
 ```
 
 ## Roadmap
 
-- **Phase 3** — REST API (FastAPI), auth (API key / OAuth2 / mTLS-CN), request tracing.
+- ~~**Phase 3** — REST API (FastAPI), auth (API key / bearer / mTLS-CN), request tracing.~~ ✅
 - **Phase 4** — Iceberg retention worker consuming the Kafka change feed.
 - **Phase 5** — load tests, contract backfill jobs, admin CLI.
 
