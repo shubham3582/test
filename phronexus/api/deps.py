@@ -17,6 +17,10 @@ def get_authenticator(request: Request) -> Authenticator:
     return request.app.state.authenticator
 
 
+def get_state_machine(request: Request):
+    return request.app.state.state_machine
+
+
 def require_principal(
     request: Request,
     authn: Authenticator = Depends(get_authenticator),

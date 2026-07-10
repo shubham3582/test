@@ -88,10 +88,14 @@ transitions:
 
 | Face | Entry | Use |
 |---|---|---|
-| **Autonomous service** | `python -m phronexus.statemachine.runner` | consume Kafka → transition → emit Kafka |
+| **Autonomous service** | `python -m phronexus.statemachine.runner` | consume Kafka → transition → emit Kafka (async) |
+| **Synchronous REST** | `POST /entities/{entity}/events` | submit an event, get accept/reject in the response |
 | **DishtaYantra node** | `PhronexusStateMachineNode.calculate(data)` | embed the same transition as a DAG `CalculationNode` |
 
-Both call the same `StateMachine.process(event)`. As a service Phronexus is a
+All three call the same `StateMachine.process(event)`. The REST face returns the
+decision synchronously — `200` applied/duplicate, `409` no valid transition,
+`422` guard failure — while output events still fan out asynchronously through
+the outbox → Kafka. As a service Phronexus is a
 loosely-coupled peer (topics are the only contract, durable + replayable +
 auditable); as a node it rides a DishtaYantra DAG with in-process latency. Pick
 per flow — for settlement/lifecycle correctness the service face usually wins;

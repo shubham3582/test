@@ -86,6 +86,13 @@ class MemoryOutputPublisher(OutputPublisher):
         self.events.append(event)
 
 
+def build_output_publisher(settings) -> "OutputPublisher":
+    """Kafka publisher when the change-feed is enabled, else an in-memory one."""
+    if settings.kafka.enabled:
+        return KafkaOutputPublisher(settings.kafka)
+    return MemoryOutputPublisher()
+
+
 class KafkaOutputPublisher(OutputPublisher):  # pragma: no cover - needs a broker
     def __init__(self, cfg: KafkaSettings):
         from phronexus.kafka_client import make_producer

@@ -116,6 +116,7 @@ PHRONEXUS_BACKEND=memory python -m phronexus.api.server   # serves on :8080
 | `GET /entities/{entity}/documents/{id}` | read by primary key |
 | `DELETE /entities/{entity}/documents/{id}` | delete (per contract policy) |
 | `POST /entities/{entity}/query?view=` | JSON query (optionally through a view) |
+| `POST /entities/{entity}/events` | **submit a domain event (sync state-machine accept/reject)** |
 | `POST /entities/{entity}/patterns/{name}` | named parameterised query |
 | `GET /entities/{entity}/views/{view}/documents/{id}` | read through a view |
 | `POST /contracts` · `POST /contracts/refresh` | contract admin (admin principal) |
@@ -173,8 +174,12 @@ sm.process(InputEvent(entity="trade", event_type="TradeConfirmed",
                       key="T-1", payload={}, event_id="evt-123"))
 ```
 
-One engine, two faces: an autonomous service (`python -m phronexus.statemachine.runner`)
-and an embedded DishtaYantra `CalculationNode` (`PhronexusStateMachineNode`). See
+Three faces, one engine: an autonomous Kafka service
+(`python -m phronexus.statemachine.runner`), a **synchronous REST endpoint**
+(`POST /entities/{entity}/events` — returns accept/reject: `200` applied/duplicate,
+`409` invalid transition, `422` guard failure, while output events still fan out
+via the outbox), and an embedded DishtaYantra `CalculationNode`
+(`PhronexusStateMachineNode`). See
 [`docs/state-machine.md`](docs/state-machine.md) and the DAG integration in
 [`docs/integration-dishtayantra.md`](docs/integration-dishtayantra.md).
 

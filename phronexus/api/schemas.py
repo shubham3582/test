@@ -41,3 +41,23 @@ class ErrorResponse(BaseModel):
 class ContractResponse(BaseModel):
     published: str  # contract identity
     activated: bool
+
+
+class EventRequest(BaseModel):
+    """A domain event submitted synchronously (the REST twin of the Kafka input)."""
+
+    event_type: str
+    key: str                                  # entity instance id (partition key)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    # Supply a stable id for idempotency; omitted => each call is a distinct event.
+    event_id: str | None = None
+    ts: float = 0.0
+
+
+class EventResponse(BaseModel):
+    status: str                               # applied | duplicate | rejected
+    doc_id: str | None = None
+    from_state: str | None = None
+    to_state: str | None = None
+    emitted: list[str] = Field(default_factory=list)
+    reason: str | None = None

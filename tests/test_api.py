@@ -101,6 +101,48 @@ def test_mtls_cn_header_auth():
                       headers={"X-Client-Cert-CN": "unknown"}).status_code == 401
 
 
+def test_sync_event_accept_reject_lifecycle(client):
+    book = dict(TRADE)
+    # Book -> 200 applied
+    r = client.post("/entities/trade/events", json={"event_type": "TradeBooked", "key": "T-1", "event_id": "e1", "payload": book})
+    assert r.status_code == 200 and r.json()["status"] == "applied" and r.json()["to_state"] == "booked"
+    # Confirm -> 200
+    r = client.post("/entities/trade/events", json={"event_type": "TradeConfirmed", "key": "T-1", "event_id": "e2", "payload": {}})
+    assert r.status_code == 200 and r.json()["to_state"] == "confirmed"
+    # Wrong transition (settle before... it's confirmed so settle is valid); instead try booking again -> rejected 409
+    r = client.post("/entities/trade/events", json={"event_type": "TradeBooked", "key": "T-1", "event_id": "e3", "payload": book})
+    assert r.status_code == 409 and r.json()["status"] == "rejected"
+
+
+def test_sync_event_guard_rejection_maps_422(client):
+    client.post("/entities/trade/events", json={"event_type": "TradeBooked", "key": "T-2", "event_id": "b", "payload": dict(TRADE, trade_id="T-2")})
+    client.post("/entities/trade/events", json={"event_type": "TradeConfirmed", "key": "T-2", "event_id": "c", "payload": {}})
+    # guard notional > 0 fails
+    r = client.post("/entities/trade/events", json={"event_type": "TradeSettled", "key": "T-2", "event_id": "s", "payload": {"notional": 0}})
+    assert r.status_code == 422 and "guard" in r.json()["reason"]
+
+
+def test_sync_event_duplicate_is_idempotent(client):
+    body = {"event_type": "TradeBooked", "key": "T-3", "event_id": "dup", "payload": dict(TRADE, trade_id="T-3")}
+    assert client.post("/entities/trade/events", json=body).json()["status"] == "applied"
+    r = client.post("/entities/trade/events", json=body)  # replay same event_id
+    assert r.status_code == 200 and r.json()["status"] == "duplicate"
+
+
+def test_sync_event_requires_auth():
+    c = _make_client(["api_key"], api_keys={"k": "svc"})
+    r = c.post("/entities/trade/events", json={"event_type": "TradeBooked", "key": "T-1", "payload": TRADE})
+    assert r.status_code == 401
+
+
+def test_events_endpoint_in_openapi(client):
+    schema = client.get("/openapi.json").json()
+    path = schema["paths"]["/entities/{entity}/events"]["post"]
+    assert 200 in [int(k) for k in path["responses"]]
+    assert 409 in [int(k) for k in path["responses"]]
+    assert 422 in [int(k) for k in path["responses"]]
+
+
 def test_admin_contract_publish_requires_admin():
     client = _make_client(["api_key"], api_keys={"admin-key": "admin", "user-key": "user"},
                           admin_principals=["admin"])
