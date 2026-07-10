@@ -54,6 +54,12 @@ class EventRequest(BaseModel):
     ts: float = 0.0
 
 
+class ValidationReportResponse(BaseModel):
+    ok: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class EventResponse(BaseModel):
     status: str                               # applied | duplicate | rejected
     doc_id: str | None = None

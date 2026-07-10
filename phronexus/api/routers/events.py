@@ -59,8 +59,8 @@ def submit_event(
 
     if result.status in ("applied", "duplicate"):
         status_code = 200
-    elif result.reason and result.reason.startswith("guard"):
-        status_code = 422
+    elif result.reason and (result.reason.startswith("guard") or result.reason.startswith("validation")):
+        status_code = 422  # unprocessable: guard or DQ/schema rejection
     else:
         status_code = 409
     return JSONResponse(status_code=status_code, content=payload)

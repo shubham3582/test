@@ -17,7 +17,7 @@ from typing import Optional
 import structlog
 
 from phronexus.config import StateMachineSettings
-from phronexus.errors import DocumentAlreadyExists, TransitionRejected
+from phronexus.errors import DocumentAlreadyExists, TransitionRejected, ValidationError
 from phronexus.statemachine.guard import safe_eval
 from phronexus.statemachine.hooks import TransitionContext
 from phronexus.statemachine.io import MemoryOutputPublisher, OutputPublisher
@@ -120,6 +120,12 @@ class StateMachine:
                     )
             except DocumentAlreadyExists:
                 return ProcessResult(status="rejected", reason="insert_only violation")
+            except ValidationError as exc:
+                self._px.telemetry.incr("phronexus.sm.rejected", entity=event.entity)
+                return ProcessResult(
+                    status="rejected", from_state=cur_state, to_state=tr.to,
+                    reason=f"validation: {exc}",
+                )
 
             # 7) Post-commit side effects + relay the outbox.
             self._manifest.post_write(staged, new_doc)

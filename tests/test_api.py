@@ -101,6 +101,23 @@ def test_mtls_cn_header_auth():
                       headers={"X-Client-Cert-CN": "unknown"}).status_code == 401
 
 
+def test_validate_endpoint_reports_errors(client):
+    r = client.post("/entities/trade/validate", json={"document": {**TRADE, "ccy": "ZZZ"}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False and any("ccy_supported" in e for e in body["errors"])
+
+
+def test_write_invalid_document_maps_422(client):
+    r = client.put("/entities/trade/documents", json={"document": {**TRADE, "notional": -1}})
+    assert r.status_code == 422 and r.json()["error"] == "validation_error"
+
+
+def test_sync_event_validation_rejection_maps_422(client):
+    r = client.post("/entities/trade/events", json={"event_type": "TradeBooked", "key": "T-1", "event_id": "v", "payload": {**TRADE, "ccy": "ZZZ"}})
+    assert r.status_code == 422 and "validation" in r.json()["reason"]
+
+
 def test_sync_event_accept_reject_lifecycle(client):
     book = dict(TRADE)
     # Book -> 200 applied

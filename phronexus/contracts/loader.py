@@ -13,6 +13,7 @@ from phronexus.contracts.models import (
     QueryContract,
     StorageContract,
     TransitionContract,
+    ValidationContract,
     ViewContract,
 )
 from phronexus.errors import ContractValidationError
@@ -22,9 +23,12 @@ _MODEL_BY_KIND = {
     ContractKind.query.value: QueryContract,
     ContractKind.view.value: ViewContract,
     ContractKind.transition.value: TransitionContract,
+    ContractKind.validation.value: ValidationContract,
 }
 
-Contract = StorageContract | QueryContract | ViewContract | TransitionContract
+Contract = (
+    StorageContract | QueryContract | ViewContract | TransitionContract | ValidationContract
+)
 
 
 def parse_contract(doc: dict[str, Any]) -> Contract:

@@ -10,6 +10,7 @@ from phronexus.api.schemas import (
     DocumentsResponse,
     PatternRequest,
     QueryRequest,
+    ValidationReportResponse,
     WriteRequest,
     WriteResponse,
 )
@@ -24,6 +25,13 @@ router = APIRouter(tags=["data"], dependencies=[Depends(require_principal)])
 def write(entity: str, body: WriteRequest, px: Phronexus = Depends(get_px)) -> WriteResponse:
     doc_id = px.put(entity, body.document)
     return WriteResponse(entity=entity, doc_id=doc_id)
+
+
+@router.post("/entities/{entity}/validate", response_model=ValidationReportResponse)
+def validate(entity: str, body: WriteRequest, px: Phronexus = Depends(get_px)) -> ValidationReportResponse:
+    """Dry-run JSON Schema + DQ checks without writing (200 with ok/errors/warnings)."""
+    report = px.validate(entity, body.document)
+    return ValidationReportResponse(ok=report.ok, errors=report.errors, warnings=report.warnings)
 
 
 @router.get("/entities/{entity}/documents/{doc_id}")

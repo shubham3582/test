@@ -44,6 +44,7 @@ last**. The manifest is the single commit point:
 | **query** | searchable fields, index types, named query patterns | `contracts_examples/trade.query.yaml` |
 | **view** | consumer output: field allow-list, masking, transforms | `contracts_examples/trade.view.*.yaml` |
 | **transition** | state-machine lifecycle: states, guards, emitted events | `contracts_examples/trade.transition.yaml` |
+| **validation** | JSON Schema (syntax) + data-quality checks | `contracts_examples/trade.validation.yaml` |
 
 Contracts are versioned and stored in the `_contracts` set. An in-process cache
 refreshes on a configurable cadence (default **300s**), so publishing a new
@@ -158,6 +159,27 @@ PHRONEXUS_BACKEND=aerospike PHRONEXUS_KAFKA__ENABLED=true \
   python -m phronexus.retention.main
 ```
 
+## Ingestion validation (JSON Schema + data quality)
+
+A **validation contract** validates every incoming document at the write boundary
+— so `put()`, the state machine, and backfill all enforce it uniformly:
+
+- **JSON Schema** (Draft 2020-12) for structural/syntax validation (required
+  fields, types, shapes).
+- **Data-quality checks** — declarative field rules (`required`, `type`, `in`,
+  `min`/`max`, `min_len`/`max_len`, `regex`) and cross-field **expressions**
+  (sandboxed), each with `severity: error | warn`.
+- `mode: enforce | warn_only | off`. Errors abort the write (HTTP `422`);
+  warnings are logged/metered but don't block.
+
+```bash
+POST /entities/{entity}/validate     # dry-run: {ok, errors[], warnings[]}
+```
+
+```python
+report = px.validate("trade", doc)   # -> ValidationReport(ok, errors, warnings)
+```
+
 ## Transactional state machine (optional face)
 
 Phronexus can also run as an **autonomous, event-driven state machine**: consume a
@@ -262,6 +284,7 @@ phronexus/
   manifest/            # write/read/delete via the manifest pattern; reaper
   query/               # inverted index + JSON/YAML query engine
   views/               # consumer view projection (allow-list, mask, transform)
+  validation/          # JSON Schema + data-quality validator
   events/              # change-feed sinks (memory, kafka)
   observability/       # structured logging + OTel telemetry
   api/                 # FastAPI app, routers, auth, middleware, server

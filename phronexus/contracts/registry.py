@@ -24,6 +24,7 @@ from phronexus.contracts.models import (
     QueryContract,
     StorageContract,
     TransitionContract,
+    ValidationContract,
     ViewContract,
 )
 from phronexus.errors import ContractNotFound
@@ -86,6 +87,9 @@ class ContractRegistry:
 
     def active_transition(self, entity: str) -> TransitionContract:
         return self._active_of("transition", entity)  # type: ignore[return-value]
+
+    def active_validation(self, entity: str) -> ValidationContract:
+        return self._active_of("validation", entity)  # type: ignore[return-value]
 
     def get_version(self, identity: str) -> Contract:
         self._maybe_refresh()

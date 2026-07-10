@@ -70,12 +70,14 @@ class ManifestManager:
         index: InvertedIndex,
         sink: EventSink,
         telemetry: Telemetry,
+        validator=None,
     ):
         self._store = store
         self._registry = registry
         self._index = index
         self._sink = sink
         self._tel = telemetry
+        self._validator = validator
         self._proj = ProjectionEngine()
 
     # --- write ----------------------------------------------------------
@@ -98,6 +100,15 @@ class ManifestManager:
         document write with additional records — outbox events, dedup markers —
         in a single atomic transaction. Call :meth:`post_write` after commit.
         """
+        # Validate at the write boundary — covers put(), the state machine, and
+        # backfill uniformly. Errors abort the (surrounding) transaction.
+        if self._validator is not None:
+            report = self._validator.validate(entity, document)
+            if report.warnings:
+                log.warning("validation.warnings", entity=entity, warnings=report.warnings)
+                self._tel.incr("phronexus.validation.warnings", entity=entity)
+            report.raise_if_failed()
+
         sc = self._registry.active_storage(entity)
         doc_id = self._proj.compute_doc_id(sc, document)
         txn_id = uuid.uuid4().hex

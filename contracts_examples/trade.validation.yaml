@@ -1,0 +1,26 @@
+# Ingestion validation for trades: JSON Schema (syntax) + data-quality checks.
+kind: validation
+entity: trade
+version: 1
+mode: enforce                 # enforce | warn_only | off
+
+# --- structural / syntax validation (JSON Schema draft 2020-12) ---
+json_schema:
+  type: object
+  required: [trade_id, counterparty, notional, ccy, trade_date]
+  properties:
+    trade_id: {type: string, minLength: 1}
+    counterparty: {type: string}
+    notional: {type: number}
+    ccy: {type: string}
+    trade_date: {type: integer}
+    book: {type: string}
+  additionalProperties: true
+
+# --- data-quality checks ---
+dq_checks:
+  - {name: notional_positive, expr: "notional > 0", severity: error}
+  - {name: ccy_supported, field: ccy, in: [USD, EUR, GBP, JPY, CHF], severity: error}
+  - {name: cpty_present, field: counterparty, required: true, min_len: 2, severity: error}
+  - {name: notional_reasonable, expr: "notional < 1000000000000", severity: warn,
+     message: "notional exceeds 1e12 — review"}

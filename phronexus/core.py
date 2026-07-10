@@ -22,6 +22,7 @@ from phronexus.observability.telemetry import Telemetry
 from phronexus.query.engine import QueryEngine
 from phronexus.query.inverted import InvertedIndex
 from phronexus.query.models import QueryDoc
+from phronexus.validation import Validator
 from phronexus.views.engine import ViewEngine
 
 log = structlog.get_logger(__name__)
@@ -52,8 +53,10 @@ class Phronexus:
         )
         self.index = InvertedIndex(self.store, index_set=self.settings.aerospike.index_set)
         self.sink = build_sink(self.settings)
+        self.validator = Validator(self.registry)
         self.manifest = ManifestManager(
-            self.store, self.registry, self.index, self.sink, self.telemetry
+            self.store, self.registry, self.index, self.sink, self.telemetry,
+            validator=self.validator,
         )
         self.query_engine = QueryEngine(self.registry, self.index, _ManifestReader(self.manifest))
         self.view_engine = ViewEngine(self.registry)
@@ -83,6 +86,10 @@ class Phronexus:
 
     def get(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
         return self.manifest.read(entity, doc_id)
+
+    def validate(self, entity: str, document: dict[str, Any]):
+        """Run JSON Schema + DQ checks without writing. Returns a ValidationReport."""
+        return self.validator.validate(entity, document)
 
     def delete(self, entity: str, doc_id: str) -> bool:
         return self.manifest.delete(entity, doc_id)

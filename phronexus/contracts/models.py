@@ -37,6 +37,7 @@ class ContractKind(str, Enum):
     query = "query"
     view = "view"
     transition = "transition"
+    validation = "validation"
 
 
 class _Base(BaseModel):
@@ -245,3 +246,60 @@ class TransitionContract(_Base):
 
     def identity(self) -> str:
         return f"transition:{self.entity}:v{self.version}"
+
+
+# --- validation contract (JSON Schema + data-quality checks) -------------
+
+class ValidationMode(str, Enum):
+    enforce = "enforce"        # errors block the write
+    warn_only = "warn_only"    # everything downgraded to a warning; never blocks
+    off = "off"                # skip validation
+
+
+class DQCheck(_Base):
+    """A declarative data-quality rule — field-scoped or a cross-field expression."""
+
+    name: str
+    severity: Literal["error", "warn"] = "error"
+    message: Optional[str] = None
+    # cross-field: a sandboxed boolean expression over the document
+    expr: Optional[str] = None
+    # field-scoped constraints (any subset; all must hold)
+    field: Optional[str] = None
+    required: bool = False
+    type: Optional[Literal["string", "number", "integer", "boolean"]] = None
+    allowed: Optional[list[Any]] = Field(default=None, alias="in")  # value allow-list
+    min: Optional[float] = None
+    max: Optional[float] = None
+    min_len: Optional[int] = None
+    max_len: Optional[int] = None
+    regex: Optional[str] = None
+
+    model_config = {"extra": "forbid", "populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _validate(self) -> "DQCheck":
+        if not self.expr and not self.field:
+            raise ValueError(f"dq check {self.name!r} must set either 'expr' or 'field'")
+        return self
+
+
+class ValidationContract(_Base):
+    kind: Literal[ContractKind.validation] = ContractKind.validation
+    entity: str
+    version: int
+    mode: ValidationMode = ValidationMode.enforce
+    json_schema: Optional[dict[str, Any]] = None   # structural / syntax validation
+    dq_checks: list[DQCheck] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate(self) -> "ValidationContract":
+        if self.json_schema is not None:
+            # Fail fast on a malformed schema at publish time.
+            from jsonschema import Draft202012Validator
+
+            Draft202012Validator.check_schema(self.json_schema)
+        return self
+
+    def identity(self) -> str:
+        return f"validation:{self.entity}:v{self.version}"

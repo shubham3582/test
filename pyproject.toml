@@ -15,6 +15,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "pyyaml>=6.0",
     "structlog>=24.1",
+    "jsonschema>=4.20",
 ]
 
 [project.scripts]
