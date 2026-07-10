@@ -212,9 +212,23 @@ python -m phronexus.api.server
 | File | Subsystem | Security |
 |------|-----------|----------|
 | `config/aerospike.yaml` | operational store | TLS/mTLS, user/pass, auth mode |
-| `config/kafka.yaml` | change-feed / state-machine transport | TLS/mTLS, SASL (SCRAM/PLAIN/OAUTHBEARER) |
-| `config/iceberg.yaml` | long-term retention | REST-catalog token/TLS, S3 credentials |
+| `config/kafka.yaml` | change-feed / state-machine transport | **Amazon MSK IAM** (default), SASL/SCRAM, or mTLS |
+| `config/iceberg.yaml` | long-term retention | **Amazon S3 Tables** (Iceberg REST + SigV4), or self-hosted REST + S3 creds |
 | `config/api.yaml` | REST server + auth | server TLS/mTLS, API-key/bearer/mTLS |
+
+### Managed AWS stack
+
+The shipped templates target a managed AWS deployment out of the box:
+
+- **Amazon MSK** — `kafka.msk_iam: true` uses SASL_SSL + OAUTHBEARER with SigV4
+  tokens from the instance role (`pip install 'phronexus-core[msk]'`); SASL/SCRAM
+  and mTLS are drop-in alternatives.
+- **Amazon S3 Tables** — `iceberg.sigv4_enabled: true` with `signing_name:
+  s3tables` (or `glue`) and the table-bucket ARN as the warehouse.
+- **Aerospike 8.1** — native multi-record transactions require **Enterprise
+  Edition + a strong-consistency namespace**; on Community Edition set
+  `aerospike.use_native_txn: false` (the manifest pattern still gives all-or-
+  nothing visibility, with weaker cross-record durability under failure).
 
 Secrets are never committed — reference them with `${ENV_VAR}` / `${ENV_VAR:-default}`
 placeholders that resolve from the environment at load time; certificate/key paths

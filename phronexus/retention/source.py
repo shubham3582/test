@@ -7,7 +7,6 @@ import json
 from typing import Optional
 
 from phronexus.config import KafkaSettings
-from phronexus.errors import ConfigError
 from phronexus.events.base import CommitEvent
 from phronexus.events.memory import MemorySink
 
@@ -37,19 +36,13 @@ class KafkaEventSource(EventSource):  # pragma: no cover - needs a broker
     """Consumes commit events from Kafka/Redpanda topics."""
 
     def __init__(self, cfg: KafkaSettings, entities: list[str], group_id: str = "phronexus-retention"):
-        try:
-            from confluent_kafka import Consumer
-        except ImportError as exc:
-            raise ConfigError(
-                "KafkaEventSource requires confluent-kafka: pip install 'phronexus-core[kafka]'"
-            ) from exc
-        conf = cfg.client_config()  # TLS/mTLS + SASL
-        conf.update({
+        from phronexus.kafka_client import make_consumer
+
+        self._consumer = make_consumer(cfg, {  # TLS/mTLS + SASL + MSK IAM
             "group.id": group_id,
             "auto.offset.reset": "earliest",
             "enable.auto.commit": True,
         })
-        self._consumer = Consumer(conf)
         self._consumer.subscribe([f"{cfg.topic_prefix}.{e}" for e in entities])
 
     def poll(self, max_events: int) -> list[CommitEvent]:

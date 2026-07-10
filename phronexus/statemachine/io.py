@@ -12,7 +12,6 @@ import json
 from typing import Optional
 
 from phronexus.config import KafkaSettings
-from phronexus.errors import ConfigError
 from phronexus.statemachine.models import InputEvent, OutputEvent
 
 
@@ -41,17 +40,13 @@ class MemoryInputSource(InputSource):
 
 class KafkaInputSource(InputSource):  # pragma: no cover - needs a broker
     def __init__(self, cfg: KafkaSettings, topics: list[str], group_id: str):
-        try:
-            from confluent_kafka import Consumer
-        except ImportError as exc:
-            raise ConfigError("KafkaInputSource requires confluent-kafka") from exc
-        conf = cfg.client_config()  # TLS/mTLS + SASL
-        conf.update({
+        from phronexus.kafka_client import make_consumer
+
+        self._c = make_consumer(cfg, {  # TLS/mTLS + SASL + MSK IAM
             "group.id": group_id,
             "auto.offset.reset": "earliest",
             "enable.auto.commit": True,
         })
-        self._c = Consumer(conf)
         self._c.subscribe(topics)
 
     def poll(self, max_events: int) -> list[InputEvent]:
@@ -93,11 +88,9 @@ class MemoryOutputPublisher(OutputPublisher):
 
 class KafkaOutputPublisher(OutputPublisher):  # pragma: no cover - needs a broker
     def __init__(self, cfg: KafkaSettings):
-        try:
-            from confluent_kafka import Producer
-        except ImportError as exc:
-            raise ConfigError("KafkaOutputPublisher requires confluent-kafka") from exc
-        self._p = Producer(cfg.client_config())  # TLS/mTLS + SASL
+        from phronexus.kafka_client import make_producer
+
+        self._p = make_producer(cfg)  # TLS/mTLS + SASL + MSK IAM
 
     def publish(self, event: OutputEvent) -> None:
         # topic may be a bare name or a "kafka://name" URI.

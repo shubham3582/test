@@ -73,14 +73,30 @@ class KafkaSettings(BaseModel):
     sasl_mechanism: str | None = None    # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512 | OAUTHBEARER | GSSAPI
     sasl_username: str | None = None
     sasl_password: str | None = None
+    # --- Amazon MSK IAM auth ---
+    # When true, use SASL_SSL + OAUTHBEARER with an AWS SigV4 token provider
+    # (requires the 'msk' extra: aws-msk-iam-sasl-signer).
+    msk_iam: bool = False
+    aws_region: str | None = None        # region used to sign MSK IAM tokens
 
     def client_config(self) -> dict[str, Any]:
-        """Map to a librdkafka (confluent-kafka) client configuration dict."""
+        """Map to a librdkafka (confluent-kafka) client configuration dict.
+
+        The OAUTHBEARER token callback for MSK IAM is attached separately at
+        client construction (see phronexus.kafka_client), not here.
+        """
         cfg: dict[str, Any] = {
             "bootstrap.servers": self.bootstrap_servers,
             "client.id": self.client_id,
             "security.protocol": self.security_protocol,
         }
+        if self.msk_iam:
+            # MSK IAM: TLS transport + OAUTHBEARER token signed with SigV4.
+            cfg["security.protocol"] = "SASL_SSL"
+            cfg["sasl.mechanism"] = "OAUTHBEARER"
+            if self.ssl_cafile:  # MSK uses a public CA; override only if pinned
+                cfg["ssl.ca.location"] = self.ssl_cafile
+            return cfg
         if self.security_protocol in ("SSL", "SASL_SSL"):
             if self.ssl_cafile:
                 cfg["ssl.ca.location"] = self.ssl_cafile
@@ -108,9 +124,14 @@ class IcebergSettings(BaseModel):
     # "memory" (in-process warehouse for tests/demos) or "iceberg" (pyiceberg).
     backend: str = "memory"
     catalog_name: str = "phronexus"
+    catalog_type: str = "rest"               # pyiceberg catalog type
     catalog_uri: str = "http://localhost:8181"
     warehouse: str = "s3://phronexus/warehouse"
     batch_size: int = 500
+    # --- AWS SigV4 signing (Amazon S3 Tables / Glue Iceberg REST) ---
+    sigv4_enabled: bool = False
+    signing_name: str | None = None          # "s3tables" (direct) or "glue" (via Glue)
+    signing_region: str | None = None        # AWS region used to sign requests
     # --- REST catalog auth / TLS ---
     catalog_token: str | None = None         # bearer token for the REST catalog
     catalog_tls_cafile: str | None = None    # CA bundle to verify the catalog
@@ -129,7 +150,18 @@ class IcebergSettings(BaseModel):
         Key names follow pyiceberg's REST/S3 FileIO conventions; confirm against
         the pinned pyiceberg version for a given deployment.
         """
-        props: dict[str, Any] = {"uri": self.catalog_uri, "warehouse": self.warehouse}
+        props: dict[str, Any] = {
+            "type": self.catalog_type,
+            "uri": self.catalog_uri,
+            "warehouse": self.warehouse,
+        }
+        if self.sigv4_enabled:
+            # Amazon S3 Tables / Glue Iceberg REST endpoints authenticate with SigV4.
+            props["rest.sigv4-enabled"] = "true"
+            if self.signing_name:
+                props["rest.signing-name"] = self.signing_name
+            if self.signing_region:
+                props["rest.signing-region"] = self.signing_region
         if self.catalog_token:
             props["token"] = self.catalog_token
         if self.catalog_tls_cafile:

@@ -7,8 +7,8 @@ Per-subsystem configuration files. Each maps to a settings group in
 |------|-----------|----------|
 | `phronexus.yaml` | top-level (backend) | — |
 | `aerospike.yaml` | operational store | TLS/mTLS + user/pass + auth mode |
-| `kafka.yaml` | change-feed / state-machine transport | TLS/mTLS + SASL |
-| `iceberg.yaml` | long-term retention | REST-catalog token/TLS + S3 creds |
+| `kafka.yaml` | change-feed / state-machine transport | Amazon MSK IAM / SASL-SCRAM / mTLS |
+| `iceberg.yaml` | long-term retention | Amazon S3 Tables (SigV4) or REST token/TLS + S3 creds |
 | `api.yaml` | REST server + auth | server TLS/mTLS + API-key/bearer/mTLS auth |
 | `observability.yaml` | logging + OpenTelemetry | — |
 | `statemachine.yaml` | transactional state machine | — |

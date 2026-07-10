@@ -1,22 +1,29 @@
-# Apache Iceberg — optional async long-term retention store.
+# Amazon S3 Tables (managed Apache Iceberg) — long-term retention store.
 # Maps to phronexus.config.IcebergSettings.
 
 enabled: true
-backend: iceberg                 # memory | iceberg
-catalog_name: phronexus
-catalog_uri: "${ICEBERG_CATALOG_URI:-https://iceberg-rest:8181}"
-warehouse: "${ICEBERG_WAREHOUSE:-s3://phronexus/warehouse}"
+backend: iceberg
+catalog_name: s3tables
+catalog_type: rest
 batch_size: 500
 
-# --- REST catalog auth / TLS ---
-catalog_token: "${ICEBERG_CATALOG_TOKEN:-}"     # bearer token for the REST catalog
-catalog_tls_cafile: "${ICEBERG_TLS_CAFILE:-/etc/phronexus/certs/iceberg-ca.pem}"
-catalog_tls_certfile: "${ICEBERG_TLS_CERTFILE:-/etc/phronexus/certs/iceberg-client.pem}"  # mTLS
-catalog_tls_keyfile: "${ICEBERG_TLS_KEYFILE:-/etc/phronexus/certs/iceberg-client.key}"    # mTLS
+# --- Amazon S3 Tables via the Iceberg REST endpoint (SigV4 auth) ---
+# Direct S3 Tables endpoint. Warehouse is the table-bucket ARN.
+catalog_uri: "${ICEBERG_CATALOG_URI:-https://s3tables.us-east-1.amazonaws.com/iceberg}"
+warehouse: "${S3TABLES_BUCKET_ARN:-arn:aws:s3tables:us-east-1:123456789012:bucket/phronexus}"
+sigv4_enabled: true
+signing_name: s3tables          # or "glue" to use the AWS Glue Iceberg REST endpoint
+signing_region: "${AWS_REGION:-us-east-1}"
 
-# --- object store (S3-compatible) ---
-s3_endpoint: "${S3_ENDPOINT:-https://minio:9000}"
-s3_region: "${S3_REGION:-us-east-1}"
-s3_access_key_id: "${S3_ACCESS_KEY_ID:-}"
-s3_secret_access_key: "${S3_SECRET_ACCESS_KEY:-}"
-s3_tls_verify: true
+# Credentials come from the AWS default chain (instance role / env / profile) —
+# no static keys needed for S3 Tables. For a self-hosted REST catalog instead,
+# unset sigv4 and use catalog_token + catalog_tls_* / s3_* below.
+#
+# catalog_token: "${ICEBERG_CATALOG_TOKEN:-}"
+# catalog_tls_cafile: /etc/phronexus/certs/iceberg-ca.pem
+# catalog_tls_certfile: /etc/phronexus/certs/iceberg-client.pem
+# catalog_tls_keyfile: /etc/phronexus/certs/iceberg-client.key
+# s3_endpoint: "${S3_ENDPOINT:-}"
+# s3_region: "${AWS_REGION:-us-east-1}"
+# s3_access_key_id: "${S3_ACCESS_KEY_ID:-}"
+# s3_secret_access_key: "${S3_SECRET_ACCESS_KEY:-}"

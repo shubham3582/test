@@ -1,24 +1,29 @@
-# Kafka / Redpanda — change-feed and state-machine transport.
+# Amazon MSK — change-feed and state-machine transport.
 # Maps to phronexus.config.KafkaSettings.
 
 enabled: true
-bootstrap_servers: "${KAFKA_BOOTSTRAP:-localhost:9093}"
+# IAM auth listens on 9098 (SASL/SCRAM: 9096, TLS/mTLS: 9094).
+bootstrap_servers: "${MSK_BOOTSTRAP:-b-1.msk.us-east-1.amazonaws.com:9098}"
 client_id: phronexus-core
 topic_prefix: phronexus.commits
 
-# --- security ---
-# PLAINTEXT | SSL | SASL_SSL | SASL_PLAINTEXT
-security_protocol: "${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}"
+# --- Amazon MSK IAM authentication (recommended) ---
+# Uses SASL_SSL + OAUTHBEARER with a SigV4-signed token from the AWS default
+# credential chain (instance role / env / profile). Requires the 'msk' extra.
+msk_iam: true
+aws_region: "${AWS_REGION:-us-east-1}"
+# MSK brokers present a public CA; pin a bundle only if your policy requires it:
+# ssl_cafile: /etc/phronexus/certs/msk-ca.pem
 
-# TLS / mTLS
-ssl_cafile: "${KAFKA_SSL_CAFILE:-/etc/phronexus/certs/kafka-ca.pem}"
-ssl_certfile: "${KAFKA_SSL_CERTFILE:-/etc/phronexus/certs/kafka-client.pem}"   # mTLS
-ssl_keyfile: "${KAFKA_SSL_KEYFILE:-/etc/phronexus/certs/kafka-client.key}"     # mTLS
-ssl_key_password: "${KAFKA_SSL_KEY_PASSWORD:-}"
-ssl_verify: true
-ssl_endpoint_identification: true
-
-# SASL (used when security_protocol is SASL_*)
-sasl_mechanism: "${KAFKA_SASL_MECHANISM:-SCRAM-SHA-512}"   # PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512 | OAUTHBEARER
-sasl_username: "${KAFKA_SASL_USERNAME:-}"
-sasl_password: "${KAFKA_SASL_PASSWORD:-}"
+# --- Alternatives (use instead of msk_iam) ---
+# SASL/SCRAM (credentials stored in AWS Secrets Manager):
+# security_protocol: SASL_SSL
+# sasl_mechanism: SCRAM-SHA-512
+# sasl_username: "${MSK_SCRAM_USER:-}"
+# sasl_password: "${MSK_SCRAM_PASSWORD:-}"
+#
+# mTLS (client certificate issued by ACM Private CA):
+# security_protocol: SSL
+# ssl_certfile: /etc/phronexus/certs/msk-client.pem
+# ssl_keyfile: /etc/phronexus/certs/msk-client.key
+# ssl_cafile: /etc/phronexus/certs/msk-ca.pem

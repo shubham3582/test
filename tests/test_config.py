@@ -75,6 +75,32 @@ def test_kafka_plaintext_has_no_tls_keys():
     assert "ssl.ca.location" not in cfg and "sasl.mechanism" not in cfg
 
 
+def test_kafka_msk_iam_client_config():
+    s = Settings(backend="memory")
+    s.kafka.msk_iam = True
+    s.kafka.aws_region = "us-east-1"
+    cfg = s.kafka.client_config()
+    assert cfg["security.protocol"] == "SASL_SSL"
+    assert cfg["sasl.mechanism"] == "OAUTHBEARER"
+    # The token callback is attached at client construction, not in the dict.
+    assert "oauth_cb" not in cfg
+
+
+def test_iceberg_s3tables_sigv4_properties():
+    s = Settings(backend="memory")
+    s.iceberg.sigv4_enabled = True
+    s.iceberg.signing_name = "s3tables"
+    s.iceberg.signing_region = "us-east-1"
+    s.iceberg.catalog_uri = "https://s3tables.us-east-1.amazonaws.com/iceberg"
+    s.iceberg.warehouse = "arn:aws:s3tables:us-east-1:123:bucket/phronexus"
+    props = s.iceberg.catalog_properties()
+    assert props["type"] == "rest"
+    assert props["rest.sigv4-enabled"] == "true"
+    assert props["rest.signing-name"] == "s3tables"
+    assert props["rest.signing-region"] == "us-east-1"
+    assert props["warehouse"].startswith("arn:aws:s3tables:")
+
+
 def test_iceberg_catalog_properties():
     s = Settings(backend="memory")
     s.iceberg.catalog_token = "tok"
@@ -93,6 +119,10 @@ def test_iceberg_catalog_properties():
 def test_example_config_dir_loads(monkeypatch):
     # The shipped config/ templates must parse (secrets resolve to blank/defaults).
     s = load_settings("config")
-    assert s.kafka.security_protocol == "SASL_SSL"
     assert s.aerospike.tls_enable is True
-    assert s.iceberg.backend == "iceberg"
+    # Kafka template targets Amazon MSK IAM.
+    assert s.kafka.msk_iam is True and s.kafka.aws_region
+    assert s.kafka.client_config()["sasl.mechanism"] == "OAUTHBEARER"
+    # Iceberg template targets Amazon S3 Tables via SigV4.
+    assert s.iceberg.backend == "iceberg" and s.iceberg.sigv4_enabled is True
+    assert s.iceberg.signing_name == "s3tables"
