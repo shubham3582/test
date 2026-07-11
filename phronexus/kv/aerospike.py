@@ -30,6 +30,43 @@ def _require_driver() -> None:
         )
 
 
+def build_client_config(cfg: AerospikeSettings) -> dict[str, Any]:
+    """Build the native ``aerospike.client`` config dict from settings.
+
+    Pure (no driver calls beyond optional constant lookups) so it can be unit
+    tested without a live cluster. Native passthrough is applied last:
+    ``cfg.policies`` merges into ``config['policies']`` and ``cfg.client_config``
+    merges at the top level — so any native client option can be set from config.
+    """
+    hosts = [
+        (h.split(":")[0], int(h.split(":")[1]))
+        for h in cfg.hosts.split(",")
+        if h.strip()
+    ]
+    config: dict[str, Any] = {"hosts": hosts}
+    # Authentication mode (INTERNAL / EXTERNAL / EXTERNAL_INSECURE / PKI).
+    auth_attr = f"AUTH_{cfg.auth_mode.upper()}"
+    if aerospike is not None and hasattr(aerospike, auth_attr):
+        config["policies"] = {"auth_mode": getattr(aerospike, auth_attr)}
+    if cfg.tls_enable:
+        config["tls"] = {
+            "enable": True,
+            "cafile": cfg.tls_cafile,
+            "certfile": cfg.tls_certfile,  # client cert -> mTLS
+            "keyfile": cfg.tls_keyfile,
+        }
+        config["hosts"] = [(h, p, cfg.tls_name) for (h, p) in hosts]
+    # --- native passthrough (wins over the computed defaults) ---
+    if cfg.policies:
+        config.setdefault("policies", {}).update(cfg.policies)
+    for k, v in (cfg.client_config or {}).items():
+        if k == "policies" and isinstance(v, dict):
+            config.setdefault("policies", {}).update(v)
+        else:
+            config[k] = v
+    return config
+
+
 class _AeroTxn(Transaction):  # pragma: no cover - needs a live cluster
     def __init__(self, client, native):
         self._client = client
@@ -49,26 +86,18 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
         _require_driver()
         self.cfg = cfg
         self.namespace = cfg.namespace
-        hosts = [
-            (h.split(":")[0], int(h.split(":")[1]))
-            for h in cfg.hosts.split(",")
-            if h.strip()
-        ]
-        config: dict[str, Any] = {"hosts": hosts}
-        # Authentication mode (INTERNAL / EXTERNAL / EXTERNAL_INSECURE / PKI).
-        auth_attr = f"AUTH_{cfg.auth_mode.upper()}"
-        if hasattr(aerospike, auth_attr):
-            config["policies"] = {"auth_mode": getattr(aerospike, auth_attr)}
-        if cfg.tls_enable:
-            config["tls"] = {
-                "enable": True,
-                "cafile": cfg.tls_cafile,
-                "certfile": cfg.tls_certfile,  # client cert -> mTLS
-                "keyfile": cfg.tls_keyfile,
-            }
-            config["hosts"] = [(h, p, cfg.tls_name) for (h, p) in hosts]
-        client = aerospike.client(config)
+        client = aerospike.client(build_client_config(cfg))
         self._client = client.connect(cfg.user, cfg.password) if cfg.user else client.connect()
+
+    def native_client(self):
+        """The connected native ``aerospike.Client`` (supported escape hatch).
+
+        Use for native features not surfaced by the KVStore API (expressions,
+        CDT list/map ops, operate(), batch, secondary-index queries, UDFs). For
+        the managed-set guard and namespaced helpers, prefer
+        :meth:`phronexus.core.Phronexus.native_aerospike`.
+        """
+        return self._client
 
     def _key(self, set_name: str, key: str):
         return (self.namespace, set_name, key)

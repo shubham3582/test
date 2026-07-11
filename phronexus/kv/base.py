@@ -103,6 +103,16 @@ class KVStore(abc.ABC):
     def transaction(self) -> "TransactionContext":
         """Return a context manager yielding a :class:`Transaction`."""
 
+    def native_client(self) -> Any:
+        """Return the backend's native client handle, if it has one.
+
+        Backends without a native driver (e.g. the in-memory store) raise
+        :class:`NotImplementedError`. Aerospike returns its connected client.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} has no native client (backend is not Aerospike)"
+        )
+
     def close(self) -> None:  # pragma: no cover - trivial default
         pass
 

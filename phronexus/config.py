@@ -57,6 +57,13 @@ class AerospikeSettings(BaseModel):
     auth_mode: str = "INTERNAL"         # INTERNAL | EXTERNAL | EXTERNAL_INSECURE | PKI
     # Prefer native multi-record transactions (Aerospike 8.0+) when available.
     use_native_txn: bool = True
+    # --- native client passthrough ---
+    # Extra native client policies merged into config["policies"] (e.g. read/write
+    # consistency level, replica policy, total_timeout, socket_timeout, max_retries).
+    policies: dict[str, Any] = Field(default_factory=dict)
+    # Any other native client-config keys, merged last so they win (e.g. rack_id,
+    # use_services_alternate, max_conns_per_node, cluster_name, compression_threshold).
+    client_config: dict[str, Any] = Field(default_factory=dict)
 
 
 class KafkaSettings(BaseModel):

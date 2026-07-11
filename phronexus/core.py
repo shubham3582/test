@@ -214,6 +214,19 @@ class Phronexus:
         j = self.settings.journal
         return MessageJournal(self.store, set_name=j.messages_set, ttl=j.ttl_seconds)
 
+    # --- native access --------------------------------------------------
+
+    def native_aerospike(self):
+        """Supported access to native Aerospike features (expressions, CDT ops,
+        operate(), batch, secondary-index queries, UDFs).
+
+        Returns a :class:`phronexus.native.NativeAerospike` that guards
+        Phronexus-managed sets. Requires ``backend='aerospike'``.
+        """
+        from phronexus.native import NativeAerospike
+
+        return NativeAerospike(self)
+
     # --- lifecycle ------------------------------------------------------
 
     def close(self) -> None:

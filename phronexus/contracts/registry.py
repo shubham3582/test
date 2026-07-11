@@ -12,7 +12,6 @@ older documents stay interpretable after the active pointer moves on.
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 from typing import Optional
@@ -186,6 +185,15 @@ class ContractRegistry:
                 "contracts": sorted(self._by_identity.keys()),
                 "active": dict(sorted(self._active.items())),
             }
+
+    def storage_contracts(self) -> list["StorageContract"]:
+        """All known storage contracts (any version), deduped by identity."""
+        with self._lock:
+            seen: dict[str, "StorageContract"] = {}
+            for c in self._by_identity.values():
+                if isinstance(c, StorageContract):
+                    seen[c.identity()] = c
+            return list(seen.values())
 
     def _start_background(self) -> None:
         def _loop() -> None:

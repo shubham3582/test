@@ -20,3 +20,15 @@ tls_keyfile: "${AEROSPIKE_TLS_KEYFILE:-/etc/phronexus/certs/aerospike-client.key
 auth_mode: "${AEROSPIKE_AUTH_MODE:-EXTERNAL}"   # INTERNAL | EXTERNAL | EXTERNAL_INSECURE | PKI
 user: "${AEROSPIKE_USER:-}"
 password: "${AEROSPIKE_PASSWORD:-}"
+
+# --- native client passthrough ---
+# `policies` merges into the client's policy map; `client_config` merges at the
+# top level and wins. Set any native option the named fields above don't cover.
+# policies:
+#   total_timeout: 200        # ms
+#   max_retries: 3
+#   read: {replica: 1}
+# client_config:
+#   rack_id: 7
+#   use_services_alternate: true
+#   max_conns_per_node: 300

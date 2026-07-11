@@ -128,6 +128,59 @@ password: "${AEROSPIKE_PASSWORD}"
 > machine degrades from effectively-once toward at-least-once. Choose Enterprise
 > + SC for production financial workloads.
 
+### Native client options (passthrough)
+
+Any native client policy Phronexus doesn't surface as a named field can be set
+via passthrough — `policies` merges into the client's policy map, `client_config`
+merges at the top level (and wins):
+
+```yaml
+# config/aerospike.yaml
+policies:
+  total_timeout: 200          # ms
+  max_retries: 3
+  read: {replica: 1}          # e.g. PREFER_RACK
+client_config:
+  rack_id: 7
+  use_services_alternate: true
+  max_conns_per_node: 300
+```
+
+### Using native Aerospike features directly (supported API)
+
+The `KVStore` API is deliberately small. For native capabilities it doesn't wrap
+— **expressions/filters, CDT list/map operations, `operate()`, batch ops,
+secondary-index queries, UDFs** — use the supported accessor:
+
+```python
+nx = px.native_aerospike()          # requires backend='aerospike'
+
+# CDT + expressions on your own set
+from aerospike_helpers.operations import list_operations as lo
+nx.operate("positions", "acct-1", [lo.list_append("legs", leg)])
+
+# a secondary-index query you manage
+nx.create_index("positions", "book", "positions_book_idx")
+q = nx.query("positions"); q.where(predicates.equals("book", "IRD-1"))
+rows = q.results()
+
+# anything else: the raw connected client
+nx.client.batch_read([(ns, "positions", k) for k in keys])
+```
+
+`native_aerospike()` returns a facade that injects the namespace and **guards
+Phronexus-managed sets**: a *write* to the manifest, projections, inverted index,
+outboxes, dedup markers, schedules, or journals raises — those must go through
+`px.put()` / the state machine, or you bypass the manifest-last invariant, the
+in-transaction index, and the change feed. **Reads and queries are never
+guarded, and your own sets have no restrictions.** Call `nx.refresh()` after
+publishing new contracts so their sets are recognised. For a fully unguarded
+handle, `px.store.native_client()` returns the raw client.
+
+> Phronexus uses its **own inverted index**, not native secondary indexes (a
+> deliberate choice). Native sindexes you create are available for your own
+> queries, but the framework's query engine won't use them.
+
 ## Amazon MSK
 
 Install: `pip install 'phronexus-core[msk]'` (IAM) or `[kafka]` (SCRAM/mTLS).
