@@ -134,6 +134,11 @@ password: "${AEROSPIKE_PASSWORD}"
 > *visibility*, but cross-record durability under failure is weaker and the state
 > machine degrades from effectively-once toward at-least-once. Choose Enterprise
 > + SC for production financial workloads.
+>
+> This is the cluster-wide default; a **storage contract can override it per
+> entity** with `native_txn: true|false` (e.g. force ordered-puts for a
+> high-throughput entity, or require MRT for a critical one) — see
+> [contracts-reference.md](contracts-reference.md#storage).
 
 ### Native client options (passthrough)
 

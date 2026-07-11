@@ -145,6 +145,13 @@ class StorageContract(_Base):
     projections: list[Projection]
     update_policy: UpdatePolicy = UpdatePolicy.upsert
     delete_policy: DeletePolicy = DeletePolicy.soft
+    # Per-entity override of the backend's ``aerospike.use_native_txn``. The
+    # manifest is always the visibility commit point; this only chooses HOW the
+    # multi-record write underneath is done:
+    #   None  — inherit the backend setting (default)
+    #   true  — wrap the write in a native Aerospike multi-record txn (8.0+ EE)
+    #   false — ordered puts, manifest written last as the commit point (works on CE)
+    native_txn: Optional[bool] = None
     iceberg: IcebergConfig = Field(default_factory=IcebergConfig)
 
     @field_validator("primary_key")

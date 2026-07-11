@@ -178,8 +178,8 @@ class InMemoryKV(KVStore):
             if cell is not None:
                 yield key, Record(bins=dict(cell.bins), generation=cell.generation, ttl=0)
 
-    def transaction(self) -> TransactionContext:
-        return TransactionContext(txn=_MemTxn(store=self))
+    def transaction(self, *, native: Optional[bool] = None) -> TransactionContext:
+        return TransactionContext(txn=_MemTxn(store=self))  # always atomic; native ignored
 
     def flush(self) -> None:
         """Test helper: drop everything."""

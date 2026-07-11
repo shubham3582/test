@@ -22,6 +22,7 @@ TTL, and Iceberg retention.
 | `update_policy` | `upsert` \| `insert_only` | `insert_only` rejects overwrites |
 | `delete_policy` | `soft` \| `hard` | soft = tombstone manifest; hard = purge |
 | `projections` | `[Projection]` | one physical record shape per read path |
+| `native_txn` | bool? | per-entity override of the backend's `aerospike.use_native_txn`: `true` = wrap the write in a native Aerospike multi-record txn (8.0+ EE), `false` = ordered puts with the manifest as the commit point (works on CE), omit/`null` = inherit the backend default. The manifest is the visibility commit point either way. |
 | `iceberg` | object | `{enabled, table, partition_by:[…], retention_days}` |
 
 **Projection**

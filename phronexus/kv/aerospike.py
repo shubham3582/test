@@ -269,11 +269,12 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
         finally:
             self._record("scan", outcome, start, error)
 
-    def transaction(self) -> TransactionContext:
-        native = None
-        if self.cfg.use_native_txn and hasattr(aerospike, "Transaction"):
-            native = aerospike.Transaction()
-        return TransactionContext(txn=_AeroTxn(self._client, native, self._op))
+    def transaction(self, *, native: Optional[bool] = None) -> TransactionContext:
+        # Per-call override wins over the backend default; either way a native txn
+        # is only used if the installed client supports it.
+        use = self.cfg.use_native_txn if native is None else native
+        native_txn = aerospike.Transaction() if (use and hasattr(aerospike, "Transaction")) else None
+        return TransactionContext(txn=_AeroTxn(self._client, native_txn, self._op))
 
     def close(self) -> None:
         self._client.close()

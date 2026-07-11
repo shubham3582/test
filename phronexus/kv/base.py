@@ -100,8 +100,13 @@ class KVStore(abc.ABC):
     # --- transactions ---------------------------------------------------
 
     @abc.abstractmethod
-    def transaction(self) -> "TransactionContext":
-        """Return a context manager yielding a :class:`Transaction`."""
+    def transaction(self, *, native: Optional[bool] = None) -> "TransactionContext":
+        """Return a context manager yielding a :class:`Transaction`.
+
+        ``native`` overrides the backend's native-transaction default for this one
+        transaction (``None`` = inherit). Backends without native transactions
+        ignore it; the in-memory backend is always atomic.
+        """
 
     def native_client(self) -> Any:
         """Return the backend's native client handle, if it has one.

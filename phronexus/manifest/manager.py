@@ -103,9 +103,10 @@ class ManifestManager:
             # run post-commit side effects (index, reap, change-feed relay).
             # Retry on optimistic-concurrency conflicts (competing writers /
             # hot-term index contention) — stage_write re-reads current state.
+            native = self.native_txn_for(entity)
             for attempt in range(self._write_max_retries + 1):
                 try:
-                    with self._store.transaction() as txn:
+                    with self._store.transaction(native=native) as txn:
                         staged = self.stage_write(entity, document, txn)
                     break
                 except GenerationConflict:
@@ -114,6 +115,14 @@ class ManifestManager:
                         raise
             self.post_write(staged, document, relay=relay)
             return staged.doc_id
+
+    def native_txn_for(self, entity: str) -> Optional[bool]:
+        """The storage contract's per-entity native-transaction override; ``None``
+        means inherit the backend's ``aerospike.use_native_txn``."""
+        try:
+            return self._registry.active_storage(entity).native_txn
+        except ContractNotFound:
+            return None
 
     def write_many(self, entity: str, documents: list[dict[str, Any]]) -> list[str]:
         """Bulk write: one transaction per document (each has its own manifest
@@ -302,7 +311,7 @@ class ManifestManager:
                 new_bins = dict(manifest.bins)
                 new_bins[M_STATUS] = STATUS_DELETED
                 new_bins[M_TS] = time.time()
-                with self._store.transaction() as txn:
+                with self._store.transaction(native=sc.native_txn) as txn:
                     self._store.put(
                         sc.manifest_set, doc_id, new_bins,
                         expected_generation=expected_gen, txn=txn,
@@ -312,7 +321,7 @@ class ManifestManager:
                     self._store.put(self._changefeed_set, f"{doc_id}:{del_txn_id}",
                                     {"ev": del_event.to_dict()}, txn=txn)
             else:  # hard delete: remove projections then manifest
-                with self._store.transaction() as txn:
+                with self._store.transaction(native=sc.native_txn) as txn:
                     for p in manifest.bins.get(M_PROJECTIONS, []):
                         self._store.remove(p["set"], p["key"], txn=txn)
                     self._store.remove(

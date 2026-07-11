@@ -141,7 +141,7 @@ class StateMachine:
                 )
 
             try:
-                with self._store.transaction() as txn:
+                with self._store.transaction(native=self._manifest.native_txn_for(event.entity)) as txn:
                     staged = self._manifest.stage_write(event.entity, new_doc, txn)
                     for i, oe in enumerate(outs):
                         self._store.put(
