@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml>=6.0",
     "structlog>=24.1",
     "jsonschema>=4.20",
+    "msgpack>=1.0",
 ]
 
 [project.scripts]

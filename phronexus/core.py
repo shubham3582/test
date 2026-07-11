@@ -198,6 +198,22 @@ class Phronexus:
 
         return Scheduler(self, output=output)
 
+    # --- journals (binary msgpack) --------------------------------------
+
+    def request_journal(self):
+        """Journal of request/response pairs (msgpack blobs + metadata bins)."""
+        from phronexus.journal import RequestJournal
+
+        j = self.settings.journal
+        return RequestJournal(self.store, set_name=j.interactions_set, ttl=j.ttl_seconds)
+
+    def message_journal(self):
+        """Journal of raw inbound messages (full envelope as a msgpack blob)."""
+        from phronexus.journal import MessageJournal
+
+        j = self.settings.journal
+        return MessageJournal(self.store, set_name=j.messages_set, ttl=j.ttl_seconds)
+
     # --- lifecycle ------------------------------------------------------
 
     def close(self) -> None:

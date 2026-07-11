@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import signal
 import threading
-import time
 
 import structlog
 
@@ -41,6 +40,12 @@ def run(px: Phronexus, source, machine: StateMachine, *, batch_size: int = 100,
             if result.status == "rejected" and machine.dead_letter(ev, result):
                 tally["dead_lettered"] += 1
         machine.drain_outbox()  # sweep any outbox rows left by failed publishes
+        # Commit offsets only after the batch is processed + relayed (manual
+        # commit closes the loss window; replay is safe because the path is
+        # idempotent). Sources without a commit() (in-memory) are a no-op.
+        commit = getattr(source, "commit", None)
+        if commit is not None:
+            commit()
         batches += 1
     return tally
 
@@ -49,8 +54,11 @@ def main() -> None:  # pragma: no cover - process entrypoint
     settings = Settings()
     px = Phronexus(settings)
     sm_cfg = settings.statemachine
-    source = KafkaInputSource(settings.kafka, sm_cfg.input_topics, sm_cfg.consumer_group)
-    machine = StateMachine(px, output=KafkaOutputPublisher(settings.kafka))
+    msg_journal = (px.message_journal()
+                   if settings.journal.enabled and settings.journal.journal_messages else None)
+    source = KafkaInputSource(settings.kafka, sm_cfg.input_topics, sm_cfg.consumer_group,
+                              journal=msg_journal)
+    machine = px.state_machine(output=KafkaOutputPublisher(settings.kafka))
 
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())

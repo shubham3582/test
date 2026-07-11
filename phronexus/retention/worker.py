@@ -13,6 +13,7 @@ from typing import Any
 
 import structlog
 
+from phronexus import codec
 from phronexus.contracts.models import StorageContract
 from phronexus.contracts.registry import ContractRegistry
 from phronexus.errors import ContractNotFound
@@ -37,12 +38,10 @@ class RetentionWorker:
             if sc is None or not sc.iceberg.enabled or not sc.iceberg.table:
                 self.stats["skipped"] += 1
                 continue
-            if ev.op == "delete":
-                self._warehouse.delete(sc.iceberg.table, ev.doc_id)
-                self.stats["deletes"] += 1
-            else:
-                self._warehouse.upsert(sc.iceberg.table, ev.doc_id, self._row(sc, ev))
-                self.stats["upserts"] += 1
+            # Insert-only: every commit is one immutable row, idempotent by txn.
+            idem_key = f"{ev.doc_id}:{ev.txn_id}"
+            self._warehouse.append(sc.iceberg.table, idem_key, self._row(sc, ev))
+            self.stats["deletes" if ev.op == "delete" else "upserts"] += 1
         return dict(self.stats)
 
     def run(self, source: EventSource, *, batch_size: int = 500, max_batches: int | None = None) -> dict[str, int]:
@@ -75,11 +74,16 @@ class RetentionWorker:
                 return None
 
     def _row(self, sc: StorageContract, ev: CommitEvent) -> dict[str, Any]:
+        # Typed metadata columns (queryable) + one msgpack blob (_raw) holding the
+        # exact document for byte-faithful retrieval. Deletes carry no document.
         row = dict(ev.document or {})
         row["_doc_id"] = ev.doc_id
-        row["_txn"] = ev.txn_id
+        row["_txn"] = ev.txn_id            # idempotency key
+        row["_version"] = ev.version        # monotonic order for "latest wins"
+        row["_op"] = ev.op                  # upsert | delete (tombstone)
         row["_cver"] = ev.contract_version
         row["_ts"] = ev.ts
+        row["_raw"] = codec.pack(ev.document) if ev.document is not None else None
         if sc.iceberg.retention_days > 0:
             row["_expire_at"] = ev.ts + sc.iceberg.retention_days * _DAY
         else:

@@ -37,10 +37,13 @@ class KafkaEventSource(EventSource):  # pragma: no cover - needs a broker
     def __init__(self, cfg: KafkaSettings, entities: list[str], group_id: str = "phronexus-retention"):
         from phronexus.kafka_client import make_consumer
 
+        # Manual commit: offsets advance only after rows are flushed to Iceberg,
+        # so a crash replays the batch instead of dropping it (append is
+        # idempotent by txn, so replay is safe).
         self._consumer = make_consumer(cfg, {  # TLS/mTLS + SASL + MSK IAM
             "group.id": group_id,
             "auto.offset.reset": "earliest",
-            "enable.auto.commit": True,
+            "enable.auto.commit": False,
         })
         self._consumer.subscribe([f"{cfg.topic_prefix}.{e}" for e in entities])
 
@@ -55,6 +58,10 @@ class KafkaEventSource(EventSource):  # pragma: no cover - needs a broker
             data = json.loads(msg.value())
             out.append(CommitEvent(**data))
         return out
+
+    def commit(self) -> None:
+        """Commit offsets — call only after the batch is flushed to Iceberg."""
+        self._consumer.commit(asynchronous=False)
 
     def close(self) -> None:
         self._consumer.close()

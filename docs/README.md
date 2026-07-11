@@ -7,6 +7,7 @@
 | [contracts-reference.md](contracts-reference.md) | Field-by-field reference for all five contract kinds (storage, query, view, validation, transition). |
 | [state-machine.md](state-machine.md) | The transactional state machine in depth: atomicity model, hooks, output routing, the three faces. |
 | [ccr-reference.md](ccr-reference.md) | End-to-end reference: Counterparty-Credit-Risk saga, the hot value cube, and the exactly-once scheduler — all as config. |
+| [retention-and-journals.md](retention-and-journals.md) | Insert-only, idempotent retention log (self-reconciling on replay) and the binary msgpack journals for messages and request/response pairs. |
 | [deployment.md](deployment.md) | Production: Aerospike / MSK / S3 Tables, TLS/mTLS, auth, observability, operations, scaling. |
 | [integration-dishtayantra.md](integration-dishtayantra.md) | Integrating Phronexus into a DishtaYantra DAG as library components. |
 

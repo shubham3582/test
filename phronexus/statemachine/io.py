@@ -40,15 +40,19 @@ class MemoryInputSource(InputSource):
 
 
 class KafkaInputSource(InputSource):  # pragma: no cover - needs a broker
-    def __init__(self, cfg: KafkaSettings, topics: list[str], group_id: str):
+    def __init__(self, cfg: KafkaSettings, topics: list[str], group_id: str, journal=None):
         from phronexus.kafka_client import make_consumer
 
+        # Manual offset commit: we commit only AFTER a batch is processed +
+        # relayed, so a crash mid-batch replays it rather than losing it. The
+        # transition/outbox path is idempotent, so replay is safe.
         self._c = make_consumer(cfg, {  # TLS/mTLS + SASL + MSK IAM
             "group.id": group_id,
             "auto.offset.reset": "earliest",
-            "enable.auto.commit": True,
+            "enable.auto.commit": False,
         })
         self._c.subscribe(topics)
+        self._journal = journal  # optional MessageJournal — records the raw envelope
 
     def poll(self, max_events: int) -> list[InputEvent]:
         out: list[InputEvent] = []
@@ -59,11 +63,22 @@ class KafkaInputSource(InputSource):  # pragma: no cover - needs a broker
             if msg.error():
                 continue
             d = json.loads(msg.value())
+            if self._journal is not None:
+                # Persist the full inbound message as msgpack before processing.
+                self._journal.record(
+                    f"{msg.topic()}:{msg.partition()}:{msg.offset()}", d,
+                    topic=msg.topic(), partition=msg.partition(), offset=msg.offset(),
+                    ts=(msg.timestamp() or (0, 0.0))[1] / 1000.0,
+                )
             out.append(InputEvent(
                 entity=d["entity"], event_type=d["event_type"], key=d["key"],
                 payload=d.get("payload", {}), event_id=d["event_id"], ts=d.get("ts", 0.0),
             ))
         return out
+
+    def commit(self) -> None:
+        """Commit consumed offsets — call only after the batch is durably handled."""
+        self._c.commit(asynchronous=False)
 
     def close(self) -> None:
         self._c.close()

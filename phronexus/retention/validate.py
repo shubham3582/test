@@ -51,9 +51,10 @@ def main() -> None:  # pragma: no cover - process entrypoint
             print(f"{table:24} — not created yet ({type(exc).__name__})")
             continue
         total += len(rows)
-        sample = {k: v for k, v in (rows[0].items() if rows else [])
+        current = warehouse.latest_state(table)  # reconciled: latest per doc, no tombstones
+        sample = {k: v for k, v in (current[0].items() if current else [])
                   if not k.startswith("_")}
-        print(f"{table:24} rows={len(rows):<6} sample={sample}")
+        print(f"{table:24} log_rows={len(rows):<6} current={len(current):<6} sample={sample}")
 
     warehouse.close()
     if total == 0:

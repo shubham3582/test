@@ -61,7 +61,10 @@ def main() -> None:  # pragma: no cover - process entrypoint
                 log.info("retention.subscribed", entities=entities)
             if source is not None:
                 worker.run(source, batch_size=settings.iceberg.batch_size, max_batches=1)
-                warehouse.flush() if hasattr(warehouse, "flush") else None
+                if hasattr(warehouse, "flush"):
+                    warehouse.flush()
+                # Commit offsets only after the batch is durably in Iceberg.
+                source.commit()
             stop.wait(poll if not entities else 1.0)
     finally:
         if source is not None:

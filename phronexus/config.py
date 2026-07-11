@@ -292,6 +292,24 @@ class StateMachineSettings(BaseModel):
     dlq_topic: str | None = None
 
 
+class JournalSettings(BaseModel):
+    """Binary (msgpack) journals: raw inbound messages + per-request req/resp.
+
+    Each record is a few small typed metadata bins plus one bin holding the full
+    payload as a msgpack blob (``raw`` for messages; ``req`` / ``resp`` for
+    interactions), decoded byte-faithfully on retrieval.
+    """
+
+    enabled: bool = False
+    # Persist every raw inbound Kafka message (full envelope) as msgpack.
+    journal_messages: bool = False
+    messages_set: str = "_messages"
+    # Persist each state-machine request + its response as msgpack.
+    journal_requests: bool = False
+    interactions_set: str = "_interactions"
+    ttl_seconds: int = 0  # 0 = keep forever; set a horizon to auto-expire records
+
+
 class ReaperSettings(BaseModel):
     enabled: bool = False
     interval_seconds: int = 60
@@ -404,6 +422,7 @@ class Settings(BaseSettings):
     changefeed: ChangeFeedSettings = Field(default_factory=ChangeFeedSettings)
     statemachine: StateMachineSettings = Field(default_factory=StateMachineSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
+    journal: JournalSettings = Field(default_factory=JournalSettings)
 
     @classmethod
     def settings_customise_sources(

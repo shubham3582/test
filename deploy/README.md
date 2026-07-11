@@ -102,7 +102,7 @@ curl -fsS -X PUT localhost:8080/entities/bond/documents -H 'content-type: applic
 
 # 4) Confirm rows landed in Iceberg on S3 (scans the tables, prints counts):
 docker compose --profile iceberg run --rm iceberg-validate
-#   warehouse.bonds          rows=1      sample={'isin': 'US0378331005', ...}
+#   warehouse.bonds          log_rows=1    current=1    sample={'isin': 'US0378331005', ...}
 #   OK: 1 row(s) retained across 1 Iceberg table(s).
 ```
 

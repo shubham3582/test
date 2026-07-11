@@ -12,7 +12,13 @@ production.
 """
 
 from phronexus.retention.source import EventSource, MemoryEventSource
-from phronexus.retention.warehouse import InMemoryWarehouse, Warehouse, build_warehouse
+from phronexus.retention.warehouse import (
+    InMemoryWarehouse,
+    Warehouse,
+    build_warehouse,
+    decode,
+    reconcile,
+)
 from phronexus.retention.worker import RetentionWorker
 
 __all__ = [
@@ -21,5 +27,7 @@ __all__ = [
     "Warehouse",
     "InMemoryWarehouse",
     "build_warehouse",
+    "reconcile",
+    "decode",
     "RetentionWorker",
 ]

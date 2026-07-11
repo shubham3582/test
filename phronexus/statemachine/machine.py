@@ -11,7 +11,6 @@ effectively-once end to end.
 from __future__ import annotations
 
 import time
-import uuid
 from typing import Optional
 
 import structlog
@@ -29,7 +28,7 @@ log = structlog.get_logger(__name__)
 class StateMachine:
     def __init__(self, px, output: Optional[OutputPublisher] = None,
                  settings: Optional[StateMachineSettings] = None,
-                 hooks: Optional[list] = None):
+                 hooks: Optional[list] = None, journal=None):
         self._px = px
         self._store = px.store
         self._registry = px.registry
@@ -37,6 +36,7 @@ class StateMachine:
         self._out = output or MemoryOutputPublisher()
         self._cfg = settings or px.settings.statemachine
         self._hooks = list(hooks or [])
+        self._journal = journal  # optional RequestJournal — records req/resp as msgpack
 
     @property
     def output(self) -> OutputPublisher:
@@ -45,6 +45,25 @@ class StateMachine:
     # --- processing -----------------------------------------------------
 
     def process(self, event: InputEvent) -> ProcessResult:
+        result = self._process(event)
+        if self._journal is not None:
+            self._record(event, result)
+        return result
+
+    def _record(self, event: InputEvent, result: ProcessResult) -> None:
+        """Persist the request + response as msgpack (best-effort — never blocks)."""
+        from dataclasses import asdict
+
+        try:
+            self._journal.record(
+                event.event_id, request=asdict(event), response=asdict(result),
+                entity=event.entity, type=event.event_type, status=result.status,
+                ts=event.ts or time.time(),
+            )
+        except Exception:  # noqa: BLE001 - journaling must not fail the pipeline
+            log.warning("statemachine.journal_failed", event_id=event.event_id)
+
+    def _process(self, event: InputEvent) -> ProcessResult:
         with self._px.telemetry.span("statemachine.process", entity=event.entity):
             tc = self._registry.active_transition(event.entity)
 
@@ -210,4 +229,8 @@ class StateMachine:
 
 def build_state_machine(px, output: Optional[OutputPublisher] = None,
                         hooks: Optional[list] = None) -> StateMachine:
-    return StateMachine(px, output=output, hooks=hooks)
+    journal = None
+    jcfg = px.settings.journal
+    if jcfg.enabled and jcfg.journal_requests:
+        journal = px.request_journal()
+    return StateMachine(px, output=output, hooks=hooks, journal=journal)

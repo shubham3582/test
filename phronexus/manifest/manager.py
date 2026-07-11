@@ -171,7 +171,7 @@ class ManifestManager:
         # Durable change-feed event (transactional outbox) — retention can't miss it.
         event = CommitEvent(
             entity=entity, doc_id=doc_id, txn_id=txn_id, contract_version=sc.version,
-            op="upsert", ts=ts, document=dict(document),
+            op="upsert", ts=ts, document=dict(document), version=expected_gen + 1,
         )
         # Wrap in one 'ev' bin — Aerospike bin names are capped at 15 chars, and
         # the event has a "contract_version" field; map keys have no such limit.
@@ -250,6 +250,7 @@ class ManifestManager:
             del_event = CommitEvent(
                 entity=entity, doc_id=doc_id, txn_id=del_txn_id,
                 contract_version=sc.version, op="delete", ts=time.time(), document=None,
+                version=expected_gen + 1,  # tombstone supersedes the current version
             )
 
             if sc.delete_policy == DeletePolicy.soft:

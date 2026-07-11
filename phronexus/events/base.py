@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import abc
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 
@@ -11,11 +11,13 @@ from typing import Any, Literal
 class CommitEvent:
     entity: str
     doc_id: str
-    txn_id: str
+    txn_id: str          # idempotency key — a replay carries the same txn_id
     contract_version: int
     op: Literal["upsert", "delete"]
     ts: float
     document: dict[str, Any] | None = None  # full doc for upserts; None for deletes
+    version: int = 0     # monotonic per-doc version (manifest generation) — the
+    #                      total order used to reconcile "latest wins" downstream
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

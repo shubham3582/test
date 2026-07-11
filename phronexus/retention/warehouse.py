@@ -1,8 +1,19 @@
-"""Warehouse abstraction: where retained rows land.
+"""Warehouse abstraction: the insert-only retention log.
 
-``InMemoryWarehouse`` keeps rows per table keyed by doc id (upserts overwrite,
-so replays are idempotent) and can expire rows past their retention horizon.
-``IcebergWarehouse`` writes to real Iceberg tables via pyiceberg.
+Retention is modelled as an **append-only, idempotent event log**. Every commit
+becomes one immutable row tagged with its ``_op`` (upsert/delete), a monotonic
+``_version`` (the manifest generation) and its ``_txn`` (idempotency key); the
+full document is also kept as a msgpack blob in ``_raw`` for byte-faithful
+retrieval. Nothing is ever mutated in place.
+
+Because rows are immutable and keyed by ``_txn``, a replay after a crash is a
+no-op (same key -> same row). "Current state" is a *derived view*:
+:func:`reconcile` keeps the max-``_version`` row per ``_doc_id`` and drops
+tombstones. That view is insensitive to duplicate appends, so the pipeline only
+needs at-least-once delivery to be correct — exactly-once falls out of the read.
+
+``InMemoryWarehouse`` backs tests/demos; ``IcebergWarehouse`` appends to real
+Iceberg tables via pyiceberg.
 """
 
 from __future__ import annotations
@@ -12,20 +23,43 @@ from typing import Any
 
 import structlog
 
+from phronexus import codec
 from phronexus.config import IcebergSettings
 
 log = structlog.get_logger(__name__)
 
 
+def reconcile(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse an append log to current state: latest ``_version`` per doc, no tombstones."""
+    latest: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        doc_id = r.get("_doc_id")
+        if doc_id is None:
+            continue
+        cur = latest.get(doc_id)
+        if cur is None or r.get("_version", 0) >= cur.get("_version", 0):
+            latest[doc_id] = r
+    return [r for r in latest.values() if r.get("_op") != "delete"]
+
+
+def decode(row: dict[str, Any]) -> Any:
+    """Recover the exact original document from a row's msgpack ``_raw`` blob."""
+    raw = row.get("_raw")
+    return codec.unpack(raw) if raw is not None else None
+
+
 class Warehouse(abc.ABC):
     @abc.abstractmethod
-    def upsert(self, table: str, doc_id: str, row: dict[str, Any]) -> None: ...
+    def append(self, table: str, idem_key: str, row: dict[str, Any]) -> None:
+        """Insert one immutable event row, idempotent by ``idem_key``."""
 
     @abc.abstractmethod
-    def delete(self, table: str, doc_id: str) -> None: ...
+    def scan(self, table: str) -> list[dict[str, Any]]:
+        """Every row in the append log (full history)."""
 
-    @abc.abstractmethod
-    def scan(self, table: str) -> list[dict[str, Any]]: ...
+    def latest_state(self, table: str) -> list[dict[str, Any]]:
+        """Reconciled current state — latest row per doc id, tombstones removed."""
+        return reconcile(self.scan(table))
 
     def count(self, table: str) -> int:
         return len(self.scan(table))
@@ -39,19 +73,17 @@ class Warehouse(abc.ABC):
 
 class InMemoryWarehouse(Warehouse):
     def __init__(self) -> None:
-        self._tables: dict[str, dict[str, dict[str, Any]]] = {}
+        # table -> idem_key -> row. Keying by idem_key makes append idempotent.
+        self._log: dict[str, dict[str, dict[str, Any]]] = {}
 
-    def upsert(self, table: str, doc_id: str, row: dict[str, Any]) -> None:
-        self._tables.setdefault(table, {})[doc_id] = dict(row)
-
-    def delete(self, table: str, doc_id: str) -> None:
-        self._tables.get(table, {}).pop(doc_id, None)
+    def append(self, table: str, idem_key: str, row: dict[str, Any]) -> None:
+        self._log.setdefault(table, {})[idem_key] = dict(row)
 
     def scan(self, table: str) -> list[dict[str, Any]]:
-        return list(self._tables.get(table, {}).values())
+        return list(self._log.get(table, {}).values())
 
     def expire(self, table: str, now: float) -> int:
-        rows = self._tables.get(table, {})
+        rows = self._log.get(table, {})
         doomed = [k for k, r in rows.items() if r.get("_expire_at") and r["_expire_at"] <= now]
         for k in doomed:
             del rows[k]
@@ -60,14 +92,16 @@ class InMemoryWarehouse(Warehouse):
         return len(doomed)
 
     def tables(self) -> list[str]:
-        return list(self._tables)
+        return list(self._log)
 
 
 class IcebergWarehouse(Warehouse):  # pragma: no cover - needs catalog + pyarrow
-    """Row-per-commit writer to Iceberg via pyiceberg.
+    """Append-only writer to Iceberg via pyiceberg.
 
-    Uses an ``_op`` column so a downstream merge/compaction resolves upserts and
-    deletes; this keeps the hot write path append-only and cheap.
+    Each commit is one row; the current-state view is produced by :func:`reconcile`
+    (or the equivalent ``row_number() OVER (PARTITION BY _doc_id ORDER BY _version
+    DESC)`` SQL). A scheduled compaction can dedup by ``_txn`` and drop tombstoned
+    / expired rows so the log does not grow without bound.
     """
 
     def __init__(self, cfg: IcebergSettings):
@@ -81,13 +115,11 @@ class IcebergWarehouse(Warehouse):  # pragma: no cover - needs catalog + pyarrow
         self._cfg = cfg
         # catalog_properties() carries the REST-catalog token/TLS + S3 credentials.
         self._catalog = load_catalog(cfg.catalog_name, **cfg.catalog_properties())
-        self._buffers: dict[str, list[dict[str, Any]]] = {}
+        # table -> idem_key -> row (dedup within a flush batch).
+        self._buffers: dict[str, dict[str, dict[str, Any]]] = {}
 
-    def upsert(self, table: str, doc_id: str, row: dict[str, Any]) -> None:
-        self._buffers.setdefault(table, []).append(row | {"_op": "upsert"})
-
-    def delete(self, table: str, doc_id: str) -> None:
-        self._buffers.setdefault(table, []).append({"_doc_id": doc_id, "_op": "delete"})
+    def append(self, table: str, idem_key: str, row: dict[str, Any]) -> None:
+        self._buffers.setdefault(table, {})[idem_key] = row
 
     def flush(self) -> None:
         import pyarrow as pa
@@ -95,7 +127,7 @@ class IcebergWarehouse(Warehouse):  # pragma: no cover - needs catalog + pyarrow
         for table, rows in self._buffers.items():
             if not rows:
                 continue
-            arrow = pa.Table.from_pylist(rows)
+            arrow = pa.Table.from_pylist(list(rows.values()))
             tbl = self._ensure_table(table, arrow.schema)
             # Conform the batch to the table's schema (add missing columns as
             # nulls, order to match) so appends survive per-batch key drift.
@@ -145,6 +177,11 @@ class IcebergWarehouse(Warehouse):  # pragma: no cover - needs catalog + pyarrow
     def scan(self, table: str) -> list[dict[str, Any]]:
         tbl = self._catalog.load_table(table)
         return tbl.scan().to_arrow().to_pylist()
+
+    def expire(self, table: str, now: float) -> int:
+        # Physical expiry on Iceberg is a compaction/DELETE concern; the scheduled
+        # maintenance job handles it. No-op here beyond the reconciled view.
+        return 0
 
     def close(self) -> None:
         self.flush()
