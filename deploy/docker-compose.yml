@@ -10,7 +10,10 @@ services:
     container_name: phx-aerospike
     ports: ["3000:3000"]
     volumes:
-      - ./aerospike.conf:/etc/aerospike/aerospike.conf:ro
+      # The image's entrypoint renders a template -> /etc/aerospike/aerospike.conf
+      # on startup, so mount our config as the TEMPLATE (it has no ${...}
+      # placeholders, so envsubst passes it through unchanged).
+      - ./aerospike.conf:/etc/aerospike/aerospike.template.conf:ro
     healthcheck:
       # CE has no auth; a TCP connect to the service port means it's accepting clients.
       test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/3000' || exit 1"]

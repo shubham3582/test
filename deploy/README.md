@@ -88,6 +88,13 @@ docker compose logs -f phronexus-runner
   CE. For production atomicity guarantees (and effectively-once state machine)
   use **Aerospike Enterprise + a strong-consistency namespace** and set
   `use_native_txn=true`.
+- **Aerospike config.** The image renders its config from a template on startup,
+  so this stack mounts `aerospike.conf` at `/etc/aerospike/aerospike.template.conf`
+  (not `aerospike.conf`). If your image tag doesn't use that template path and the
+  container exits with `/etc/aerospike/aerospike.conf: Read-only file system`,
+  fall back to env-var templating: remove the volume and set
+  `NAMESPACE: phronexus` (and optionally `MEM_GB: "1"`, `STORAGE_GB: "1"`,
+  `DEFAULT_TTL: "0"`) in the `aerospike` service environment.
 - **Logs:** `docker compose logs -f phronexus-api` (or `phx-aerospike`, `phx-redpanda`).
 - **Rebuild after code changes:** `docker compose up -d --build phronexus-api`.
 - **First build is slow** (installs the Aerospike + Kafka clients); subsequent
