@@ -107,6 +107,19 @@ dq_checks:                     # semantic quality rules
   - {name: isin_format, field: isin, regex: "^[A-Z]{2}[A-Z0-9]{9}[0-9]$", severity: error}
 ```
 
+Beyond field/expression rules, DQ supports **context-aware checks** that do a
+store lookup — `unique` (no duplicate value across the entity) and `references`
+(the value must point at an existing document of another entity):
+
+```yaml
+dq_checks:
+  - {name: ext_id_unique, field: ext_id, unique: true}
+  - {name: issuer_exists, field: issuer_id, references: issuer}
+```
+
+Both are evaluated at the write boundary; see
+[contracts-reference.md](contracts-reference.md) for the concurrency note.
+
 ### 4. View — consumer output
 
 ```yaml

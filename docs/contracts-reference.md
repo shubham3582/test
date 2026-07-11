@@ -104,9 +104,24 @@ backfill.
 | `min` / `max` | number | numeric bounds |
 | `min_len` / `max_len` | int | length bounds |
 | `regex` | string | pattern the value must match |
+| `unique` | bool | value must be unique across the entity (store lookup) |
+| `references` | string | value must be an existing doc id of the named entity (store lookup) |
 
 Expressions support comparisons, `and`/`or`/`not`, names (document fields), and
 literals — no function calls, imports, or attribute access.
+
+**Context-aware checks.** `unique` and `references` do a store lookup at the
+write boundary. `unique` uses the inverted index when the field is searchable
+(fast) and falls back to a scan otherwise — index unique fields in the query
+contract. Both are evaluated pre-commit; under high concurrency, strict
+uniqueness also needs an Aerospike strong-consistency namespace (two concurrent
+inserts of the same value can otherwise both pass). Example:
+
+```yaml
+dq_checks:
+  - {name: ext_id_unique, field: ext_id, unique: true}
+  - {name: cpty_exists,   field: counterparty_id, references: counterparty}
+```
 
 ---
 

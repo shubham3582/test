@@ -137,7 +137,10 @@ class StateMachine:
             # HOOK on_committed — post-commit effects, around the outbox relay.
             for h in self._hooks:
                 h.on_committed(event, result)
-            self.drain_outbox()
+            # Inline relay keeps it simple; disable it to let a standalone relay
+            # process own the drain (insulates this path from slow brokers).
+            if self._cfg.inline_relay:
+                self.drain_outbox()
             log.info(
                 "statemachine.transition", entity=event.entity, doc_id=staged.doc_id,
                 **{"from": cur_state}, to=tr.to, emitted=[o.topic for o in outs],

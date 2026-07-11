@@ -274,6 +274,9 @@ class DQCheck(_Base):
     min_len: Optional[int] = None
     max_len: Optional[int] = None
     regex: Optional[str] = None
+    # context-aware checks (require a store lookup)
+    unique: bool = False               # value must be unique across the entity
+    references: Optional[str] = None   # value must be an existing doc id of this entity
 
     model_config = {"extra": "forbid", "populate_by_name": True}
 

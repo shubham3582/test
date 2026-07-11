@@ -236,6 +236,11 @@ class StateMachineSettings(BaseModel):
     # Kafka topic the autonomous runner consumes domain events from (if wired).
     input_topics: list[str] = Field(default_factory=list)
     consumer_group: str = "phronexus-statemachine"
+    # If True, process() drains the outbox inline after commit (simple, but a
+    # slow broker/webhook adds latency to the request). If False, a standalone
+    # relay (python -m phronexus.statemachine.relay) owns the drain.
+    inline_relay: bool = True
+    relay_poll_seconds: float = 1.0
     # HTTP output publisher (for http(s):// emit targets) — TLS/mTLS + headers.
     http_timeout: float = 5.0
     http_tls_cafile: str | None = None

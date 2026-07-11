@@ -13,6 +13,7 @@ import structlog
 from phronexus.config import Settings
 from phronexus.contracts.loader import Contract, load_dir, load_file, parse_contract
 from phronexus.contracts.registry import ContractRegistry
+from phronexus.errors import ContractNotFound
 from phronexus.events import build_sink
 from phronexus.kv import build_store
 from phronexus.manifest.manager import ManifestManager
@@ -38,6 +39,45 @@ class _ManifestReader:
         return self._m.read(entity, doc_id)
 
 
+class _Lookup:
+    """Store lookups for context-aware DQ checks (unique / references)."""
+
+    def __init__(self, px: "Phronexus"):
+        self._px = px
+
+    def doc_id(self, entity: str, document: dict[str, Any]) -> Optional[str]:
+        try:
+            sc = self._px.registry.active_storage(entity)
+            return self._px.manifest._proj.compute_doc_id(sc, document)  # noqa: SLF001
+        except Exception:  # noqa: BLE001 - missing PK etc. -> no self-exclusion
+            return None
+
+    def exists(self, entity: str, doc_id: str) -> bool:
+        return self._px.manifest.read(entity, doc_id) is not None
+
+    def others_with(self, entity, field, value, exclude_doc_id) -> bool:
+        px = self._px
+        # Fast path: the inverted index, when the field is searchable.
+        try:
+            qc = px.registry.active_query(entity)
+            if field in {s.field for s in qc.searchable}:
+                ids = px.index.lookup_eq(entity, field, value)
+                return any(d != exclude_doc_id for d in ids)
+        except ContractNotFound:
+            pass
+        # Correctness fallback: scan committed documents (O(n) — index the field).
+        from phronexus.manifest.manager import M_STATUS, STATUS_COMMITTED
+
+        sc = px.registry.active_storage(entity)
+        for key, rec in px.store.scan(sc.manifest_set):
+            if key == exclude_doc_id or rec.bins.get(M_STATUS) != STATUS_COMMITTED:
+                continue
+            doc = px.manifest.read(entity, key)
+            if doc and doc.get(field) == value:
+                return True
+        return False
+
+
 class Phronexus:
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or Settings()
@@ -58,6 +98,9 @@ class Phronexus:
             self.store, self.registry, self.index, self.sink, self.telemetry,
             validator=self.validator,
         )
+        # Wire store lookups now that the manifest/index exist (enables the
+        # unique / references DQ checks).
+        self.validator.set_lookup(_Lookup(self))
         self.query_engine = QueryEngine(self.registry, self.index, _ManifestReader(self.manifest))
         self.view_engine = ViewEngine(self.registry)
         self.reaper = Reaper(self.store, self.registry)

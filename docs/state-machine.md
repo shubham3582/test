@@ -132,6 +132,19 @@ dispatches by scheme:
 A single transition can mix them (some events to Kafka, some to a webhook, some
 silent). Failed HTTP/Kafka publishes stay in the outbox for retry (at-least-once).
 
+**Inline vs. standalone relay.** By default `process()` drains the outbox inline
+after commit — simplest, but a slow broker/webhook adds latency to the sync REST
+response or the runner. Set `statemachine.inline_relay: false` and run a
+standalone relay so the write path returns as soon as the transaction commits:
+
+```bash
+python -m phronexus.statemachine.relay      # drains the outbox -> publishers
+```
+
+The transition is durable the moment it commits; the relay publishes
+at-least-once and can run with multiple replicas (rows are removed only after a
+successful publish; consumers dedup on event id).
+
 ## What it reuses vs. adds
 
 **Reuses:** manifest + native transaction (the atomic core), the `_outbox`/change-

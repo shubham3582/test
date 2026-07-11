@@ -140,6 +140,24 @@ def test_http_output_non_2xx_raises_and_keeps_outbox(px):
     assert list(px.store.scan(px.settings.statemachine.outbox_set))
 
 
+def test_standalone_relay_split(px):
+    # With inline_relay off, process() commits but does NOT publish; a separate
+    # relay drain does. Insulates the write path from slow brokers.
+    from phronexus.statemachine.relay import run_once
+
+    px.settings.statemachine.inline_relay = False
+    out = MemoryOutputPublisher()
+    sm = px.state_machine(output=out)
+    r = sm.process(_ev("TradeBooked", "T-1", BOOK, "e1"))
+    assert r.status == "applied"                          # committed
+    assert out.events == []                               # not published inline
+    assert list(px.store.scan(px.settings.statemachine.outbox_set))  # queued
+
+    published = run_once(sm)                               # the relay drains it
+    assert published >= 1 and [e.topic for e in out.events] == ["kafka://trades.booked"]
+    assert list(px.store.scan(px.settings.statemachine.outbox_set)) == []
+
+
 def test_consumer_only_no_output(px):
     # A transition with no emit — consume + process, nothing published.
     px.publish_contract({

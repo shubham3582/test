@@ -20,14 +20,24 @@ from typing import Any
 
 import structlog
 
+from typing import Optional, Protocol
+
 from phronexus.contracts.models import DQCheck, ValidationMode
 from phronexus.contracts.registry import ContractRegistry
-from phronexus.errors import ContractNotFound, ValidationError
+from phronexus.errors import ConfigError, ContractNotFound, ValidationError
 from phronexus.statemachine.guard import safe_eval
 
 log = structlog.get_logger(__name__)
 
 _MISSING = object()
+
+
+class LookupProvider(Protocol):
+    """Store lookups needed by context-aware DQ checks (unique / references)."""
+
+    def doc_id(self, entity: str, document: dict) -> Optional[str]: ...
+    def exists(self, entity: str, doc_id: str) -> bool: ...
+    def others_with(self, entity: str, field: str, value: Any, exclude_doc_id: Optional[str]) -> bool: ...
 
 
 @dataclass
@@ -42,8 +52,13 @@ class ValidationReport:
 
 
 class Validator:
-    def __init__(self, registry: ContractRegistry):
+    def __init__(self, registry: ContractRegistry, lookup: Optional[LookupProvider] = None):
         self._registry = registry
+        self._lookup = lookup
+
+    def set_lookup(self, lookup: LookupProvider) -> None:
+        """Wire the store lookup (done after the manifest/index exist)."""
+        self._lookup = lookup
 
     def validate(self, entity: str, document: dict[str, Any]) -> ValidationReport:
         try:
@@ -60,9 +75,12 @@ class Validator:
         if vc.json_schema is not None:
             errors.extend(f"schema: {e}" for e in self._schema_errors(vc.json_schema, document))
 
+        # Compute the doc id once for context-aware checks (best effort).
+        doc_id = self._lookup.doc_id(entity, document) if self._lookup else None
+
         # 2) Data-quality checks.
         for check in vc.dq_checks:
-            passed, detail = self._eval_check(check, document)
+            passed, detail = self._eval_check(check, document, entity, doc_id)
             if not passed:
                 msg = check.message or f"{check.name}: {detail}"
                 (errors if check.severity == "error" else warnings).append(msg)
@@ -87,7 +105,9 @@ class Validator:
             out.append(f"{loc}: {err.message}")
         return out
 
-    def _eval_check(self, check: DQCheck, doc: dict[str, Any]) -> tuple[bool, str]:
+    def _eval_check(
+        self, check: DQCheck, doc: dict[str, Any], entity: str, doc_id: Optional[str]
+    ) -> tuple[bool, str]:
         # Cross-field expression.
         if check.expr:
             try:
@@ -116,6 +136,18 @@ class Validator:
             return (False, f"field {check.field!r} longer than {check.max_len}")
         if check.regex is not None and not re.search(check.regex, str(val)):
             return (False, f"field {check.field!r} does not match /{check.regex}/")
+
+        # Context-aware checks (store lookups).
+        if check.unique:
+            if self._lookup is None:
+                raise ConfigError("a 'unique' DQ check requires a lookup provider")
+            if self._lookup.others_with(entity, check.field, val, doc_id):
+                return (False, f"field {check.field!r}={val!r} already exists (must be unique)")
+        if check.references:
+            if self._lookup is None:
+                raise ConfigError("a 'references' DQ check requires a lookup provider")
+            if not self._lookup.exists(check.references, str(val)):
+                return (False, f"field {check.field!r}={val!r} references no existing {check.references}")
         return (True, "")
 
 

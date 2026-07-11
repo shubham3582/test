@@ -41,6 +41,7 @@ flowchart TB
 |---|---|---|
 | REST API | `python -m phronexus.api.server` | replicas behind the LB |
 | State-machine runner | `python -m phronexus.statemachine.runner` | Kafka partitions (key = doc_id) |
+| Outbox relay (optional) | `python -m phronexus.statemachine.relay` | replicas (set `inline_relay: false`) |
 | Retention worker | `python -m phronexus.retention.main` | consumer group members |
 | Reaper / backfill | `phronexus reap …` / `phronexus backfill …` | cron / one-shot jobs |
 
@@ -179,6 +180,12 @@ otel_endpoint: http://otel-collector:4317
 
 Backfill is idempotent (writes are keyed by `doc_id` + generation CAS), so it's
 safe to re-run.
+
+**Outbox relay.** Set `statemachine.inline_relay: false` and run
+`python -m phronexus.statemachine.relay` to decouple output publishing from the
+write path — so a slow broker/webhook never adds latency to the sync `/events`
+endpoint or the runner. The transition is durable on commit; the relay publishes
+at-least-once and scales with replicas.
 
 ## Scaling & ordering
 
