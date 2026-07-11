@@ -173,7 +173,9 @@ class ManifestManager:
             entity=entity, doc_id=doc_id, txn_id=txn_id, contract_version=sc.version,
             op="upsert", ts=ts, document=dict(document),
         )
-        self._store.put(self._changefeed_set, f"{doc_id}:{txn_id}", event.to_dict(), txn=txn)
+        # Wrap in one 'ev' bin — Aerospike bin names are capped at 15 chars, and
+        # the event has a "contract_version" field; map keys have no such limit.
+        self._store.put(self._changefeed_set, f"{doc_id}:{txn_id}", {"ev": event.to_dict()}, txn=txn)
         # Manifest LAST — the commit point.
         self._store.put(
             sc.manifest_set, doc_id, manifest_bins, expected_generation=expected_gen, txn=txn
@@ -199,7 +201,7 @@ class ManifestManager:
         published = 0
         for key, rec in list(self._store.scan(self._changefeed_set)):
             try:
-                self._sink.emit(CommitEvent(**rec.bins))
+                self._sink.emit(CommitEvent(**rec.bins["ev"]))
             except Exception:  # noqa: BLE001 - leave for retry
                 log.warning("changefeed.emit_failed", key=key)
                 continue
@@ -262,7 +264,7 @@ class ManifestManager:
                     if self._index_in_txn:
                         self._stage_deindex(entity, doc_id, old_data, txn)
                     self._store.put(self._changefeed_set, f"{doc_id}:{del_txn_id}",
-                                    del_event.to_dict(), txn=txn)
+                                    {"ev": del_event.to_dict()}, txn=txn)
             else:  # hard delete: remove projections then manifest
                 with self._store.transaction() as txn:
                     for p in manifest.bins.get(M_PROJECTIONS, []):
@@ -273,7 +275,7 @@ class ManifestManager:
                     if self._index_in_txn:
                         self._stage_deindex(entity, doc_id, old_data, txn)
                     self._store.put(self._changefeed_set, f"{doc_id}:{del_txn_id}",
-                                    del_event.to_dict(), txn=txn)
+                                    {"ev": del_event.to_dict()}, txn=txn)
 
             if not self._index_in_txn:
                 self._deindex(entity, doc_id, old_data)
