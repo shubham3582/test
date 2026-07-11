@@ -160,6 +160,16 @@ def test_events_endpoint_in_openapi(client):
     assert 422 in [int(k) for k in path["responses"]]
 
 
+def test_list_contracts_endpoint(client):
+    r = client.get("/contracts")
+    assert r.status_code == 200 and "storage:trade:v1" in r.json()["contracts"]
+
+
+def test_get_contract_endpoint(client):
+    r = client.get("/contracts/storage:trade:v1")
+    assert r.status_code == 200 and r.json()["entity"] == "trade"
+
+
 def test_admin_contract_publish_requires_admin():
     client = _make_client(["api_key"], api_keys={"admin-key": "admin", "user-key": "user"},
                           admin_principals=["admin"])

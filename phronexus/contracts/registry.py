@@ -147,6 +147,19 @@ class ContractRegistry:
             self._last_refresh = time.monotonic()
         log.debug("contract.cache.refreshed", contracts=len(by_identity), active=len(active))
 
+    def list_contracts(self) -> dict:
+        """Enumerate contracts persisted in the store (the source of truth).
+
+        Refreshes from the store first, so this reflects Aerospike, not just the
+        local cache — use it to verify ingestion before removing source files.
+        """
+        self.refresh(force=True)
+        with self._lock:
+            return {
+                "contracts": sorted(self._by_identity.keys()),
+                "active": dict(sorted(self._active.items())),
+            }
+
     def _start_background(self) -> None:
         def _loop() -> None:
             while not self._stop.wait(self._refresh_seconds):

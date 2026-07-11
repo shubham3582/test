@@ -32,9 +32,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--contracts-dir", help="load contracts from this directory first")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("publish-contract", help="publish a contract file")
+    p = sub.add_parser("publish-contract", help="publish a single contract file")
     p.add_argument("path")
     p.add_argument("--no-activate", action="store_true")
+
+    p = sub.add_parser("ingest", help="publish a directory of contracts into the store")
+    p.add_argument("dir", help="directory of *.yaml/*.json contracts")
+    p.add_argument("--no-activate", action="store_true")
+
+    sub.add_parser("list-contracts", help="list contracts stored in the source of truth")
+
+    p = sub.add_parser("get-contract", help="dump one stored contract by identity")
+    p.add_argument("identity", help="e.g. storage:trade:v1")
 
     p = sub.add_parser("put", help="write a document")
     p.add_argument("entity")
@@ -67,6 +76,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "publish-contract":
             px.load_contract_file(args.path, activate=not args.no_activate)
             _print({"published": args.path, "activated": not args.no_activate})
+        elif args.cmd == "ingest":
+            from phronexus.contracts.loader import load_dir
+
+            contracts = load_dir(args.dir)
+            for c in contracts:
+                px.publish_contract(c, activate=not args.no_activate)
+            _print({"ingested": [c.identity() for c in contracts],
+                    "count": len(contracts), "activated": not args.no_activate})
+        elif args.cmd == "list-contracts":
+            _print(px.list_contracts())
+        elif args.cmd == "get-contract":
+            _print(px.get_contract(args.identity))
         elif args.cmd == "put":
             _print({"doc_id": px.put(args.entity, json.loads(args.json))})
         elif args.cmd == "get":

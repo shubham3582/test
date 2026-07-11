@@ -275,6 +275,14 @@ phronexus --contracts-dir examples/bond backfill bond
 
 Old documents remain readable under their original version until backfilled.
 
+> **Contracts live in Aerospike, not in files.** The `_contracts` set is the
+> source of truth. YAML files are only an ingestion vehicle: publish once
+> (`phronexus ingest ./contracts` or `POST /contracts`), verify with
+> `phronexus list-contracts`, then the files can be removed — they are **not part
+> of the deployment**. The API server and workers read contracts from Aerospike
+> and hot-reload. (The in-memory examples reload files each run only because that
+> backend is ephemeral.)
+
 ## Testing your extension
 
 Everything runs on the in-memory backend, so tests need no services:

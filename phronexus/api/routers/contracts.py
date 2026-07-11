@@ -25,3 +25,15 @@ def publish(body: dict[str, Any], activate: bool = True, px: Phronexus = Depends
 def refresh(px: Phronexus = Depends(get_px)) -> dict:
     px.refresh_contracts()
     return {"refreshed": True}
+
+
+@router.get("/contracts")
+def list_contracts(px: Phronexus = Depends(get_px)) -> dict:
+    """List contracts persisted in the store (the source of truth)."""
+    return px.list_contracts()
+
+
+@router.get("/contracts/{identity}")
+def get_contract(identity: str, px: Phronexus = Depends(get_px)) -> dict:
+    """Fetch one stored contract by identity, e.g. 'storage:trade:v1'."""
+    return px.get_contract(identity)

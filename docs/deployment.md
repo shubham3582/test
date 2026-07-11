@@ -45,6 +45,43 @@ flowchart TB
 | Retention worker | `python -m phronexus.retention.main` | consumer group members |
 | Reaper / backfill | `phronexus reap …` / `phronexus backfill …` | cron / one-shot jobs |
 
+## Contracts: Aerospike is the source of truth
+
+Contracts live in the Aerospike `_contracts` set — **that is the source of
+truth**, not the YAML files. Files are only an *ingestion vehicle*.
+
+```mermaid
+flowchart LR
+    F[contract files<br/>*.yaml] -- ingest once --> AERO[(Aerospike<br/>_contracts set)]
+    F -. removed after ingest .-> X[not deployed]
+    AERO --> API[API server]
+    AERO --> RUN[runner]
+    AERO --> RET[retention]
+    API -. hot-reload ≤300s .- AERO
+```
+
+- **Ingest once** (a CI/admin step), then the files can be deleted and are **not
+  part of the deployment**:
+
+  ```bash
+  phronexus ingest ./contracts          # publish a directory into Aerospike
+  phronexus list-contracts              # verify what's persisted (source of truth)
+  phronexus get-contract storage:trade:v1
+  # or over REST (admin):  POST /contracts   GET /contracts   GET /contracts/{identity}
+  ```
+
+- **Runtime reads only from Aerospike.** The API server, state-machine runner,
+  and workers construct a registry that reads the `_contracts` set and
+  hot-reloads on `contracts.refresh_seconds` (default 300s). No file dependency
+  at runtime — a new process sees the contracts immediately.
+- **Schema evolution** = publish a new version + flip the active pointer (a live
+  Aerospike write); running processes pick it up on their next refresh.
+- Ingestion is idempotent, so re-running it in CI is safe.
+
+> The in-memory dev/test path calls `load_contract_dir(...)` at startup only
+> because that backend is ephemeral. On Aerospike you ingest once and the store
+> persists.
+
 ## Configuration
 
 Layered, highest precedence first: **kwargs → env vars → `.env` → per-subsystem

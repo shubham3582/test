@@ -122,6 +122,14 @@ class Phronexus:
     def refresh_contracts(self) -> None:
         self.registry.refresh(force=True)
 
+    def list_contracts(self) -> dict:
+        """List contracts persisted in the store (source of truth)."""
+        return self.registry.list_contracts()
+
+    def get_contract(self, identity: str) -> dict:
+        """Fetch one stored contract by identity (e.g. 'storage:trade:v1')."""
+        return self.registry.get_version(identity).model_dump(mode="json", by_alias=True)
+
     # --- data plane -----------------------------------------------------
 
     def put(self, entity: str, document: dict[str, Any]) -> str:
