@@ -125,8 +125,18 @@ rj.read("evt-1")
 The request is stored in the `req` blob, the response in `resp`, with
 `entity`/`type`/`status`/`ts` (and any extra kwargs) as metadata bins. Set
 `journal.journal_requests: true` and **every state-machine `process()` call is
-journaled automatically** — a complete, queryable-by-metadata, byte-faithful
-audit trail of each request and the exact response it produced. Journaling is
+journaled automatically** — over Kafka *and* HTTP (`POST /entities/{entity}/events`
+uses the same journaled machine). The stored response includes `emitted_events` —
+the **full outbound events** (topic, type, key, payload) the transition sent — so
+the journal answers "what came in, and exactly what we sent." Read one over REST:
+
+```
+GET /interactions/{event_id}
+# {"meta": {"status": "applied", ...}, "request": <event>,
+#  "response": {"to_state": "...", "emitted_events": [{topic, type, payload}, ...]}}
+```
+
+It's a complete, queryable-by-metadata, byte-faithful audit trail. Journaling is
 best-effort: a journal failure logs a warning and never fails the pipeline.
 
 > Metadata bin names must stay ≤15 characters (Aerospike’s limit). The built-in

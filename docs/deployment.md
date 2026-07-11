@@ -366,6 +366,17 @@ otel_endpoint: http://otel-collector:4317
   transition) and metrics over OTLP — writes/reads/queries, latency histograms,
   commit-failure rate, `sm.applied/rejected/duplicate/dropped`, validation
   warnings, contract-cache age, outbox depth. FastAPI is auto-instrumented.
+- **Per-Aerospike-operation metrics** (for Dynatrace / CloudWatch via the OTel
+  collector), emitted by the KV backend:
+  - `phronexus.aerospike.op.duration` — latency histogram (ms)
+  - `phronexus.aerospike.op.count` — request counter
+  - both tagged `op` (`get` · `put` · `remove` · `batch_get` · `scan` ·
+    `txn_commit` · `txn_abort`) and `outcome` (`ok` · `error` · `conflict`;
+    errors also carry an `error` type). So success rate, failure rate, CAS-conflict
+    rate, and p50/p95/p99 latency are all sliceable per operation.
+
+  Enable by turning on OTel (`otel_enabled: true`, install `phronexus-core[otel]`);
+  workers (`retention`, `audit`) export them too via their own settings.
 
 ## Operations
 

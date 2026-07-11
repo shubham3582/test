@@ -66,6 +66,17 @@ def trace(entity: str, doc_id: str, px: Phronexus = Depends(get_px)) -> dict:
     return {"entity": entity, "doc_id": doc_id, "events": px.trace(entity, doc_id)}
 
 
+@router.get("/interactions/{event_id}")
+def read_interaction(event_id: str, px: Phronexus = Depends(get_px)) -> dict:
+    """The journaled request + response for one state-machine event: the inbound
+    event, the outcome, and the full emitted events it sent. Requires the request
+    journal to be enabled (`journal.enabled` + `journal.journal_requests`)."""
+    rec = px.request_journal().read(event_id)
+    if rec is None:
+        raise DocumentNotFound(f"no journaled interaction {event_id!r}")
+    return rec
+
+
 @router.get("/entities/{entity}/views/{view}/documents/{doc_id}")
 def read_view(entity: str, view: str, doc_id: str, px: Phronexus = Depends(get_px)) -> dict:
     doc = px.view(entity, view, doc_id)

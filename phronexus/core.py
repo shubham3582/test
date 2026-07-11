@@ -88,7 +88,7 @@ class Phronexus:
         configure_logging(self.settings.observability)
 
         self.telemetry = Telemetry(self.settings.observability)
-        self.store = build_store(self.settings)
+        self.store = build_store(self.settings, self.telemetry)
         self.registry = ContractRegistry(
             self.store,
             contracts_set=self.settings.aerospike.contracts_set,

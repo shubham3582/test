@@ -113,6 +113,52 @@ px.query_page(QueryDoc(
 `tenor` is declared `numeric` in `value_cube.query.yaml`, so it supports both
 range predicates (`tenor <= max`) and ordered sort.
 
+#### Future-value cube — storage layouts
+
+The cube's *physical* shape is a storage-contract choice. All three layouts below
+are config only (no cube-specific code); pick by data volume and read pattern.
+
+**1. Point per `(trade, scenario, tenor)`** — the default above. One small record
+per point; hot reads sort/clip by `tenor`. Simple; many records per trade.
+
+**2. Transposed — dates as bins** ([`examples/fvcube/`](../examples/fvcube)). One
+record per `(trade, scenario)`; the ETL shapes the curve as a `{date: value}` map
+and a `spread` projection explodes it so **each date is its own Aerospike bin**
+(`d20260712`, `d20260718`, …) for native per-date access:
+
+```yaml
+- name: wide
+  set: fvc_wide
+  key: "{trade_id}:{scenario_id}"
+  fields: [as_of, currency, curve]
+  encoding: bins
+  spread: [{field: curve, prefix: "d"}]     # {date: value} -> bins d<YYYYMMDD>
+```
+
+**3. At scale — parts as bins + max per date**
+([`examples/fv_paths/`](../examples/fv_paths)). When each date carries **3 parts of
+~2000 numbers** (e.g. Monte-Carlo paths), transposing into one record would blow
+Aerospike's record-size limit — so put `val_date` in the primary key (**one ~48 KB
+record per date**), store each part as its own bin, and a per-date `max` computed
+at ingest:
+
+```yaml
+primary_key: [trade_id, scenario_id, val_date]   # one record per date
+projections:
+  - {name: doc, set: fvp_doc, key: "{trade_id}:{scenario_id}:{val_date}", fields: ["*"], encoding: msgpack, canonical: true}
+  - name: wide
+    set: fvp_wide
+    key: "{trade_id}:{scenario_id}:{val_date}"
+    fields: [val_date, currency, max_value, part1, part2, part3]
+    encoding: bins
+    bin_map: {max_value: max, part1: p1, part2: p2, part3: p3}
+```
+
+Reads always reconstruct the clean nested document from the canonical (msgpack)
+projection; the `bins`/`spread` projections are native, read-optimised physical
+views. See [contracts-reference.md](contracts-reference.md#storage) for the
+`encoding` / `bin_map` / `spread` fields.
+
 ## The scheduler — EOD exactly once across replicas
 
 `schedules/eod.json` fires the EOD job daily at 18:30 New York:

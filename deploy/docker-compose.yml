@@ -63,6 +63,10 @@ services:
       # Fast contract-cache refresh so ingested contracts show up quickly.
       PHRONEXUS_CONTRACTS__REFRESH_SECONDS: "5"
       PHRONEXUS_OBSERVABILITY__LOG_LEVEL: INFO
+      # Journal each state-machine event's request + response (readable at
+      # GET /interactions/{event_id}).
+      PHRONEXUS_JOURNAL__ENABLED: "true"
+      PHRONEXUS_JOURNAL__JOURNAL_REQUESTS: "true"
       # Management UI + API auth (JWT login). CHANGE these for anything real.
       PHRONEXUS_API__AUTH__SCHEMES: '["jwt"]'
       PHRONEXUS_API__AUTH__JWT_SECRET: local-dev-change-me

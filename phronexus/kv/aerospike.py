@@ -8,11 +8,18 @@ package stays installable without it.
 
 from __future__ import annotations
 
+import contextlib
+import time
 from typing import Any, Iterator, Optional
 
 from phronexus.config import AerospikeSettings
 from phronexus.errors import ConfigError, GenerationConflict, StorageError
 from phronexus.kv.base import KVStore, Record, Transaction, TransactionContext
+
+# OTLP metrics emitted per operation (consumable by Dynatrace / CloudWatch via
+# the OTel collector). One histogram + one counter, tagged by op and outcome.
+_M_DURATION = "phronexus.aerospike.op.duration"   # milliseconds
+_M_COUNT = "phronexus.aerospike.op.count"         # requests, by outcome
 
 try:  # pragma: no cover - exercised only with the driver installed
     import aerospike
@@ -68,26 +75,69 @@ def build_client_config(cfg: AerospikeSettings) -> dict[str, Any]:
 
 
 class _AeroTxn(Transaction):  # pragma: no cover - needs a live cluster
-    def __init__(self, client, native):
+    def __init__(self, client, native, op=None):
         self._client = client
         self.native = native  # aerospike.Transaction or None
+        self._op = op         # AerospikeKV._op context manager, or None
 
     def commit(self) -> None:
-        if self.native is not None:
+        if self.native is None:
+            return
+        if self._op is None:
+            self._client.commit(self.native)
+            return
+        with self._op("txn_commit"):
             self._client.commit(self.native)
 
     def abort(self) -> None:
-        if self.native is not None:
+        if self.native is None:
+            return
+        if self._op is None:
+            self._client.abort(self.native)
+            return
+        with self._op("txn_abort"):
             self._client.abort(self.native)
 
 
 class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
-    def __init__(self, cfg: AerospikeSettings):
+    def __init__(self, cfg: AerospikeSettings, telemetry=None):
         _require_driver()
         self.cfg = cfg
         self.namespace = cfg.namespace
+        if telemetry is None:  # standalone construction -> no-op metrics
+            from phronexus.config import ObservabilitySettings
+            from phronexus.observability.telemetry import Telemetry
+
+            telemetry = Telemetry(ObservabilitySettings())
+        self._tel = telemetry
         client = aerospike.client(build_client_config(cfg))
         self._client = client.connect(cfg.user, cfg.password) if cfg.user else client.connect()
+
+    # --- per-operation metrics ------------------------------------------
+
+    def _record(self, op: str, outcome: str, start: float, error: Optional[str] = None) -> None:
+        self._tel.observe(_M_DURATION, (time.perf_counter() - start) * 1000.0, op=op, outcome=outcome)
+        attrs = {"op": op, "outcome": outcome}
+        if error is not None:
+            attrs["error"] = error
+        self._tel.incr(_M_COUNT, 1.0, **attrs)
+
+    @contextlib.contextmanager
+    def _op(self, op: str):
+        """Time an operation and record latency + outcome. ``GenerationConflict``
+        (optimistic-concurrency CAS) is tagged ``conflict``, not ``error``."""
+        start = time.perf_counter()
+        outcome, error = "ok", None
+        try:
+            yield
+        except GenerationConflict as exc:
+            outcome, error = "conflict", type(exc).__name__
+            raise
+        except Exception as exc:  # noqa: BLE001 - classify then re-raise
+            outcome, error = "error", type(exc).__name__
+            raise
+        finally:
+            self._record(op, outcome, start, error)
 
     def native_client(self):
         """The connected native ``aerospike.Client`` (supported escape hatch).
@@ -121,11 +171,12 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
         policy = {}
         if txn is not None and getattr(txn, "native", None) is not None:
             policy["txn"] = txn.native
-        try:
-            _, meta, bins = self._client.get(self._key(set_name, key), policy=policy)
-        except ax.RecordNotFound:
-            return None
-        return Record(bins=bins, generation=meta["gen"], ttl=meta.get("ttl", 0))
+        with self._op("get"):
+            try:
+                _, meta, bins = self._client.get(self._key(set_name, key), policy=policy)
+            except ax.RecordNotFound:
+                return None  # a miss is a normal read, not a failure
+            return Record(bins=bins, generation=meta["gen"], ttl=meta.get("ttl", 0))
 
     def batch_get(
         self, set_name: str, keys: list[str], *, txn: Optional[Transaction] = None
@@ -145,15 +196,16 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
                 return  # not found / no user key
             out[key[2]] = Record(bins=bins, generation=meta["gen"], ttl=meta.get("ttl", 0))
 
-        if hasattr(self._client, "batch_read"):   # modern client
-            for br in self._client.batch_read(as_keys).batch_records:
-                if getattr(br, "result", 0) == 0:
-                    _add(getattr(br, "record", None))
-        elif hasattr(self._client, "get_many"):    # legacy client
-            for rec in self._client.get_many(as_keys):
-                _add(rec)
-        else:  # no batch API — per-key gets
-            return super().batch_get(set_name, keys, txn=txn)
+        with self._op("batch_get"):
+            if hasattr(self._client, "batch_read"):   # modern client
+                for br in self._client.batch_read(as_keys).batch_records:
+                    if getattr(br, "result", 0) == 0:
+                        _add(getattr(br, "record", None))
+            elif hasattr(self._client, "get_many"):    # legacy client
+                for rec in self._client.get_many(as_keys):
+                    _add(rec)
+            else:  # no batch API — per-key gets (each self-instruments as "get")
+                return super().batch_get(set_name, keys, txn=txn)
         return out
 
     def put(
@@ -169,49 +221,59 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
         meta = {"ttl": self._ttl(ttl)}
         if expected_generation is not None:
             meta["gen"] = expected_generation
-        try:
-            self._client.put(
-                self._key(set_name, key),
-                bins,
-                meta=meta,
-                policy=self._policy(expected_generation, txn),
-            )
-        except ax.RecordGenerationError as exc:
-            raise GenerationConflict(str(exc)) from exc
-        except ax.AerospikeError as exc:
-            raise StorageError(str(exc)) from exc
+        with self._op("put"):
+            try:
+                self._client.put(
+                    self._key(set_name, key),
+                    bins,
+                    meta=meta,
+                    policy=self._policy(expected_generation, txn),
+                )
+            except ax.RecordGenerationError as exc:
+                raise GenerationConflict(str(exc)) from exc
+            except ax.AerospikeError as exc:
+                raise StorageError(str(exc)) from exc
         # Generation is server-assigned; callers that need it re-read.
         return expected_generation + 1 if expected_generation is not None else 0
 
     def remove(self, set_name, key, *, expected_generation=None, txn: Optional[Transaction] = None):
         meta = {"gen": expected_generation} if expected_generation is not None else None
-        try:
-            self._client.remove(
-                self._key(set_name, key),
-                meta=meta,
-                policy=self._policy(expected_generation, txn),
-            )
-        except ax.RecordNotFound:
-            return
-        except ax.RecordGenerationError as exc:
-            raise GenerationConflict(str(exc)) from exc
+        with self._op("remove"):
+            try:
+                self._client.remove(
+                    self._key(set_name, key),
+                    meta=meta,
+                    policy=self._policy(expected_generation, txn),
+                )
+            except ax.RecordNotFound:
+                return
+            except ax.RecordGenerationError as exc:
+                raise GenerationConflict(str(exc)) from exc
 
     def scan(self, set_name) -> Iterator[tuple[str, Record]]:
         # query() with no predicate is a full-set scan (scan() is deprecated in
         # newer clients). Records carry their user key because writes use
         # POLICY_KEY_SEND; skip any legacy record that lacks one.
-        q = self._client.query(self.namespace, set_name)
-        for (key, meta, bins) in q.results():
-            userkey = key[2]
-            if userkey is None:
-                continue
-            yield userkey, Record(bins=bins, generation=meta["gen"], ttl=meta.get("ttl", 0))
+        start = time.perf_counter()
+        outcome, error = "ok", None
+        try:
+            q = self._client.query(self.namespace, set_name)
+            for (key, meta, bins) in q.results():
+                userkey = key[2]
+                if userkey is None:
+                    continue
+                yield userkey, Record(bins=bins, generation=meta["gen"], ttl=meta.get("ttl", 0))
+        except Exception as exc:  # noqa: BLE001
+            outcome, error = "error", type(exc).__name__
+            raise
+        finally:
+            self._record("scan", outcome, start, error)
 
     def transaction(self) -> TransactionContext:
         native = None
         if self.cfg.use_native_txn and hasattr(aerospike, "Transaction"):
             native = aerospike.Transaction()
-        return TransactionContext(txn=_AeroTxn(self._client, native))
+        return TransactionContext(txn=_AeroTxn(self._client, native, self._op))
 
     def close(self) -> None:
         self._client.close()

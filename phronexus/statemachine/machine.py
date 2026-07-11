@@ -167,6 +167,7 @@ class StateMachine:
             result = ProcessResult(
                 status="applied", doc_id=staged.doc_id, from_state=cur_state,
                 to_state=tr.to, emitted=[o.topic for o in outs],
+                emitted_events=[o.to_dict() for o in outs],
             )
             # HOOK on_committed — post-commit effects, around the outbox relay.
             for h in self._hooks:

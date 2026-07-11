@@ -1,5 +1,9 @@
 # Future-value cube at scale — parts as bins, max per date
 
+> Part of the future-value-cube storage layouts consolidated in
+> [docs/ccr-reference.md](../../docs/ccr-reference.md#future-value-cube--storage-layouts)
+> (layout **3**). This README is the runnable how-to.
+
 When each date carries **3 parts of ~2000 numbers** (e.g. Monte-Carlo paths),
 transposing every date into one record would blow Aerospike's record-size limit.
 The model here instead:

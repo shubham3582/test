@@ -45,7 +45,12 @@ and named inverted indexes `idx_cp`/`idx_ns`) ·
 `python examples/fvcube/run_fvcube.py` (a future-value cube stored **transposed** —
 each date as its own Aerospike bin, via a `spread` projection) ·
 `python examples/fv_paths/run_fv_paths.py` (the same cube **at scale** — 3 parts ×
-~2000 numbers per date: one record per date, each part its own bin, max per date).
+~2000 numbers per date: one record per date, each part its own bin, max per date) ·
+`python examples/library_embed/run_embed.py` (the **whole API embedded as a library** —
+operational store + state-machine node + request/response journal + retention→Iceberg,
+no services) ·
+`python examples/reject_handling/run_reject.py` (what to do when validation fails —
+drop / whole message to a Kafka reject topic / HTTP webhook / a specific message via a hook).
 All default to the always-available in-memory
 backend (no services); prefix with `PHRONEXUS_BACKEND=aerospike` to run the same
 code against a live Aerospike + Kafka stack.
@@ -281,6 +286,11 @@ POST /entities/{entity}/validate     # dry-run: {ok, errors[], warnings[]}
 ```python
 report = px.validate("trade", doc)   # -> ValidationReport(ok, errors, warnings)
 ```
+
+**On failure**, choose what happens by config: drop, route the whole message to a
+Kafka reject topic or an HTTP webhook (`statemachine.dlq_topic:` `kafka://…` /
+`http://…` / `null://`), or emit a specific message via a reject hook — see
+[`examples/reject_handling/`](examples/reject_handling).
 
 ## Transactional state machine (optional face)
 

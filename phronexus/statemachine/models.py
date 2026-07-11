@@ -51,3 +51,7 @@ class ProcessResult:
     to_state: Optional[str] = None
     emitted: list[str] = field(default_factory=list)  # output topics
     reason: Optional[str] = None
+    # Full outbound events (topic/type/key/payload) sent by this transition — the
+    # "what we sent" half of the journaled request/response. Not surfaced in the
+    # REST/node response; captured in the interaction journal.
+    emitted_events: list[dict[str, Any]] = field(default_factory=list)

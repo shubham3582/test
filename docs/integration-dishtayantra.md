@@ -1,7 +1,16 @@
 # Integrating Phronexus Core with DishtaYantra
 
-**Status:** design (pre-implementation) · **Direction:** DishtaYantra is the base DAG
-engine; Phronexus Core integrates into it as library-level components.
+**Status:** adapters implemented, SPI base classes pending the repo · **Direction:**
+DishtaYantra is the base DAG engine; Phronexus Core integrates into it as
+library-level components.
+
+> **Implemented now** (swap in DishtaYantra's real base classes once confirmed):
+> `phronexus/statemachine/node.py` — `PhronexusStateMachineNode` (state machine as
+> a `calculate`/`details` calculator) and `PhronexusQueryCalculator` (read/enrichment).
+> A runnable, no-services demo of the **whole** library surface — operational store,
+> state-machine node + request/response journal, query calculator, and
+> retention→Iceberg driven in-process — is in
+> [`examples/library_embed/`](../examples/library_embed).
 
 > **Scope note.** This design is derived from the DishtaYantra paper's described API
 > — `ComputeGraph`, the six node types, the `calculate(data)/details()` calculator

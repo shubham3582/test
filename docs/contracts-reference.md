@@ -70,6 +70,43 @@ list.
 A range op (`gt/gte/lt/lte`) requires a `numeric` index; queries need at least
 one positive predicate (`eq/in/range`) to seed candidates.
 
+### Worked example — one entity: `t_doc`, `t_base`, `idx_cp`, `idx_ns`
+
+A single `trade` entity showing the full storage + query surface together: the
+whole document as one msgpack blob (`t_doc`), a few hot elements each as their own
+bin (`t_base`), and two named inverted indexes.
+
+```yaml
+kind: storage
+entity: trade
+version: 1
+primary_key: [trade_id]
+manifest_set: trade_manifest
+projections:
+  - {name: doc, set: t_doc, key: "{trade_id}", fields: ["*"], encoding: msgpack, canonical: true}
+  - name: base                         # a few hot elements, each its own bin
+    set: t_base
+    key: "{counterparty_id}:{trade_id}"
+    fields: [trade_id, counterparty_id, netting_set_id, notional, currency, trade_date]
+    encoding: bins
+    bin_map: {counterparty_id: cp_id, netting_set_id: ns_id}   # 15-char bin names
+```
+
+```yaml
+kind: query
+entity: trade
+version: 1
+searchable:
+  - {field: counterparty_id, index: string, name: idx_cp}   # inverted index idx_cp
+  - {field: netting_set_id,  index: string, name: idx_ns}   # inverted index idx_ns
+patterns:
+  - {name: by_counterparty, where: [{field: counterparty_id, op: eq, value: "${cpty}"}]}
+```
+
+Pull all trades for a counterparty via `idx_cp` + a single batch read:
+`px.find("trade", "counterparty_id", "CP-GS")`. Runnable end-to-end (with
+reference-data DQ) in [`examples/otc_trade/`](../examples/otc_trade).
+
 ---
 
 ## `view`
