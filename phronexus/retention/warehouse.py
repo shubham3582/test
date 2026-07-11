@@ -8,7 +8,7 @@ so replays are idempotent) and can expire rows past their retention horizon.
 from __future__ import annotations
 
 import abc
-from typing import Any, Optional
+from typing import Any
 
 import structlog
 
@@ -95,9 +95,52 @@ class IcebergWarehouse(Warehouse):  # pragma: no cover - needs catalog + pyarrow
         for table, rows in self._buffers.items():
             if not rows:
                 continue
-            tbl = self._catalog.load_table(table)
-            tbl.append(pa.Table.from_pylist(rows))
+            arrow = pa.Table.from_pylist(rows)
+            tbl = self._ensure_table(table, arrow.schema)
+            # Conform the batch to the table's schema (add missing columns as
+            # nulls, order to match) so appends survive per-batch key drift.
+            tbl.append(self._conform(arrow, tbl.schema().as_arrow()))
         self._buffers.clear()
+
+    def _ensure_table(self, table: str, arrow_schema):
+        """Load the table, creating the namespace + table on first use.
+
+        The retention worker owns its tables, so bootstrapping here keeps the
+        stack self-serving: no manual DDL before rows can land.
+        """
+        from pyiceberg.exceptions import (
+            NamespaceAlreadyExistsError,
+            NoSuchTableError,
+            TableAlreadyExistsError,
+        )
+
+        ident = tuple(table.split("."))
+        if len(ident) > 1:
+            try:
+                self._catalog.create_namespace(ident[:-1])
+            except NamespaceAlreadyExistsError:
+                pass
+        try:
+            return self._catalog.load_table(table)
+        except NoSuchTableError:
+            try:
+                return self._catalog.create_table(table, schema=arrow_schema)
+            except TableAlreadyExistsError:  # a peer worker won the race
+                return self._catalog.load_table(table)
+
+    @staticmethod
+    def _conform(arrow, target_schema):
+        """Return ``arrow`` aligned to ``target_schema`` (missing cols -> nulls)."""
+        import pyarrow as pa
+
+        cols = {name: arrow.column(name) for name in arrow.schema.names}
+        out = []
+        for field in target_schema:
+            col = cols.get(field.name)
+            if col is None:
+                col = pa.nulls(arrow.num_rows, type=field.type)
+            out.append(col)
+        return pa.table(out, schema=target_schema)
 
     def scan(self, table: str) -> list[dict[str, Any]]:
         tbl = self._catalog.load_table(table)

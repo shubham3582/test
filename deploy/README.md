@@ -39,6 +39,10 @@ docker compose down -v
 | `phx-redpanda` | `redpandadata/redpanda:v24.1.7` | 9092, 9644 | Kafka API + admin |
 | `phx-api` | built from `../Dockerfile` | 8080 | REST API |
 | `phx-runner` | built from `../Dockerfile` | — | optional (profile `workers`) |
+| `phx-scheduler` | built from `../Dockerfile` | — | optional (profile `workers`), scalable |
+| `phx-minio` | `minio/minio:latest` | 9000, 9001 | optional (profile `iceberg`), S3 store |
+| `phx-iceberg-rest` | `apache/iceberg-rest-fixture:latest` | 8181 | optional (profile `iceberg`), catalog |
+| `phx-retention` | built from `../Dockerfile` | — | optional (profile `iceberg`), change-feed → Iceberg |
 
 ## Try it by hand
 
@@ -75,6 +79,38 @@ docker compose exec redpanda rpk topic produce bonds.events <<'EOF'
 EOF
 docker compose logs -f phronexus-runner
 ```
+
+### Validate the Iceberg / S3 retention lake
+
+The `iceberg` profile adds **MinIO** (an S3-compatible object store), an
+**Iceberg REST catalog**, and the **retention worker** — so you can validate the
+full async retention path locally: *API write → Kafka change feed → retention
+worker → Iceberg table on S3*. It's the same code path as Amazon S3 Tables /
+Glue Iceberg REST (swap the endpoint + turn on SigV4 — see
+[../docs/deployment.md](../docs/deployment.md)).
+
+```bash
+# 1) Bring the base stack up and ingest contracts (if not already):
+./setup.sh
+
+# 2) Start MinIO + the Iceberg REST catalog + the retention worker:
+docker compose --profile iceberg up -d
+
+# 3) Write a few documents so the change feed has something to retain:
+BOND='{"document":{"isin":"US0378331005","issuer":"APPLE","coupon":3.85,"currency":"USD","maturity_date":20310215,"callable":true}}'
+curl -fsS -X PUT localhost:8080/entities/bond/documents -H 'content-type: application/json' -d "$BOND"
+
+# 4) Confirm rows landed in Iceberg on S3 (scans the tables, prints counts):
+docker compose --profile iceberg run --rm iceberg-validate
+#   warehouse.bonds          rows=1      sample={'isin': 'US0378331005', ...}
+#   OK: 1 row(s) retained across 1 Iceberg table(s).
+```
+
+The retention worker creates the namespace + table on first use (no manual DDL),
+subscribes to every entity whose storage contract sets `iceberg.enabled: true`
+(`bond` and `trade` in the examples), and self-heals if it starts before
+contracts are ingested. Browse the raw Parquet/metadata objects in the MinIO
+console at **http://localhost:9001** (login: `phronexus` / `phronexus-secret`).
 
 ## Notes & troubleshooting
 

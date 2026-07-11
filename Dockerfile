@@ -20,7 +20,7 @@ WORKDIR /app
 # Install dependencies first for better layer caching.
 COPY pyproject.toml README.md ./
 COPY phronexus ./phronexus
-RUN pip install --upgrade pip && pip install '.[api,aerospike,kafka,oidc]'
+RUN pip install --upgrade pip && pip install '.[api,aerospike,kafka,oidc,iceberg]'
 
 # Contracts + examples for ingestion and the smoke test.
 COPY contracts_examples ./contracts_examples

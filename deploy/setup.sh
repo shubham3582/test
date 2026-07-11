@@ -63,5 +63,8 @@ ok "Redpanda admin: http://localhost:9644/public_metrics"
 echo
 echo "Optional — start the autonomous Kafka state-machine runner:"
 echo "  docker compose --profile workers up -d phronexus-runner"
+echo "Optional — Iceberg/S3 retention lake (MinIO + REST catalog + worker):"
+echo "  docker compose --profile iceberg up -d"
+echo "  docker compose --profile iceberg run --rm iceberg-validate"
 echo "Tear down:"
 echo "  docker compose down -v"

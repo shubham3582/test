@@ -3,9 +3,16 @@
 In production this runs as its own process next to (not inside) the app: it
 builds a registry against the same Aerospike cluster, consumes the Kafka change
 feed, and writes to Iceberg. It never touches the hot write path.
+
+Entities are re-resolved from the contract registry each cycle, so the worker
+can start before contracts are ingested and pick them up as they appear (and
+subscribe to newly Iceberg-enabled entities without a restart).
 """
 
 from __future__ import annotations
+
+import signal
+import threading
 
 import structlog
 
@@ -33,17 +40,32 @@ def main() -> None:  # pragma: no cover - process entrypoint
     warehouse = build_warehouse(settings.iceberg)
     worker = RetentionWorker(registry, warehouse)
 
-    # Subscribe to every entity that declares Iceberg retention.
-    entities = sorted({c.entity for c in worker._enabled_contracts()})  # noqa: SLF001
-    source = KafkaEventSource(settings.kafka, entities)
-    log.info("retention.start", entities=entities, warehouse=settings.iceberg.backend)
+    stop = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+
+    poll = settings.scheduler.poll_seconds  # reuse a small poll cadence
+    entities: list[str] = []
+    source: KafkaEventSource | None = None
+    log.info("retention.start", warehouse=settings.iceberg.backend)
     try:
-        while True:
-            worker.run(source, batch_size=settings.iceberg.batch_size, max_batches=1)
-    except KeyboardInterrupt:
-        pass
+        while not stop.is_set():
+            # Re-resolve the set of Iceberg-enabled entities; (re)subscribe on change.
+            registry.refresh(force=True)
+            current = sorted({c.entity for c in worker._enabled_contracts()})  # noqa: SLF001
+            if current != entities:
+                if source is not None:
+                    source.close()
+                entities = current
+                source = KafkaEventSource(settings.kafka, entities) if entities else None
+                log.info("retention.subscribed", entities=entities)
+            if source is not None:
+                worker.run(source, batch_size=settings.iceberg.batch_size, max_batches=1)
+                warehouse.flush() if hasattr(warehouse, "flush") else None
+            stop.wait(poll if not entities else 1.0)
     finally:
-        source.close()
+        if source is not None:
+            source.close()
         warehouse.close()
         log.info("retention.stop", stats=worker.stats)
 

@@ -165,6 +165,40 @@ Credentials come from the AWS default chain (instance role / env / profile). Pin
 the `ssl.*` catalog property keys to your `pyiceberg` version — they vary more
 across releases than the Kafka/Aerospike ones.
 
+### Validate locally first (MinIO + Iceberg REST)
+
+The exact same code path runs against a **local** Iceberg REST catalog on MinIO,
+so you can validate retention before pointing at S3 Tables. The `deploy/` stack
+ships an `iceberg` profile (MinIO + `apache/iceberg-rest-fixture` + the retention
+worker):
+
+```bash
+cd deploy
+docker compose --profile iceberg up -d
+# write some documents, then:
+docker compose --profile iceberg run --rm iceberg-validate
+```
+
+The client config differs only in the endpoint and auth — SigV4 off, an explicit
+S3 endpoint, static keys:
+
+```yaml
+# config/iceberg.yaml (local MinIO)
+enabled: true
+backend: iceberg
+catalog_uri: "http://iceberg-rest:8181"
+warehouse: "s3://warehouse/"
+s3_endpoint: "http://minio:9000"
+s3_region: us-east-1
+s3_access_key_id: "${MINIO_KEY}"
+s3_secret_access_key: "${MINIO_SECRET}"
+```
+
+Moving to S3 Tables is a config swap (catalog URI + `sigv4_enabled: true` +
+`signing_name`/`signing_region`), no code change. The retention worker creates
+the namespace + table on first use, so no manual DDL is needed in either
+environment. See [deploy/README.md](../../deploy/README.md#validate-the-iceberg--s3-retention-lake).
+
 ## Security
 
 - **Transport**: TLS everywhere; mTLS to Aerospike, MSK, and (optionally) the

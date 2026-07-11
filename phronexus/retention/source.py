@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import abc
 import json
-from typing import Optional
 
 from phronexus.config import KafkaSettings
 from phronexus.events.base import CommitEvent

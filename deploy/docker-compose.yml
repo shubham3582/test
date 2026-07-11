@@ -115,3 +115,113 @@ services:
       PHRONEXUS_KAFKA__SECURITY_PROTOCOL: PLAINTEXT
       PHRONEXUS_SCHEDULER__POLL_SECONDS: "5"
     command: ["python", "-m", "phronexus.scheduler.runner"]
+
+  # --- Iceberg retention lake (profile: iceberg) --------------------------
+  # MinIO (S3-compatible object store) + an Iceberg REST catalog + the
+  # retention worker. Validates the async retention path end to end:
+  #   API write -> Kafka change feed -> retention worker -> Iceberg table on S3.
+  #   docker compose --profile iceberg up -d
+  #   python validate_iceberg.py         # scans the landed rows
+  minio:
+    image: minio/minio:latest
+    container_name: phx-minio
+    profiles: ["iceberg"]
+    command: server /data --console-address ":9001"
+    ports: ["9000:9000", "9001:9001"]     # S3 API / web console
+    environment:
+      MINIO_ROOT_USER: phronexus
+      MINIO_ROOT_PASSWORD: phronexus-secret
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 10s
+
+  # One-shot: create the warehouse bucket, then exit.
+  minio-init:
+    image: minio/mc:latest
+    container_name: phx-minio-init
+    profiles: ["iceberg"]
+    depends_on:
+      minio: {condition: service_healthy}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 phronexus phronexus-secret &&
+      mc mb --ignore-existing local/warehouse &&
+      echo 'bucket warehouse ready'
+      "
+
+  iceberg-rest:
+    image: apache/iceberg-rest-fixture:latest
+    container_name: phx-iceberg-rest
+    profiles: ["iceberg"]
+    depends_on:
+      minio-init: {condition: service_completed_successfully}
+    ports: ["8181:8181"]
+    environment:
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: phronexus
+      AWS_SECRET_ACCESS_KEY: phronexus-secret
+      AWS_REGION: us-east-1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8181/v1/config || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 15s
+
+  phronexus-retention:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: phx-retention
+    profiles: ["iceberg"]
+    depends_on:
+      phronexus-api: {condition: service_healthy}
+      iceberg-rest: {condition: service_healthy}
+    environment:
+      PHRONEXUS_BACKEND: aerospike
+      PHRONEXUS_AEROSPIKE__HOSTS: aerospike:3000
+      PHRONEXUS_AEROSPIKE__USE_NATIVE_TXN: "false"
+      PHRONEXUS_KAFKA__ENABLED: "true"
+      PHRONEXUS_KAFKA__BOOTSTRAP_SERVERS: redpanda:9092
+      PHRONEXUS_KAFKA__SECURITY_PROTOCOL: PLAINTEXT
+      PHRONEXUS_CONTRACTS__REFRESH_SECONDS: "5"
+      # Write to real Iceberg tables via the REST catalog on top of MinIO.
+      PHRONEXUS_ICEBERG__BACKEND: iceberg
+      PHRONEXUS_ICEBERG__CATALOG_URI: http://iceberg-rest:8181
+      PHRONEXUS_ICEBERG__WAREHOUSE: s3://warehouse/
+      PHRONEXUS_ICEBERG__S3_ENDPOINT: http://minio:9000
+      PHRONEXUS_ICEBERG__S3_REGION: us-east-1
+      PHRONEXUS_ICEBERG__S3_ACCESS_KEY_ID: phronexus
+      PHRONEXUS_ICEBERG__S3_SECRET_ACCESS_KEY: phronexus-secret
+      PHRONEXUS_OBSERVABILITY__LOG_LEVEL: INFO
+    command: ["python", "-m", "phronexus.retention.main"]
+
+  # On-demand check: scans the Iceberg tables and prints landed row counts.
+  #   docker compose --profile iceberg run --rm iceberg-validate
+  iceberg-validate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    profiles: ["iceberg"]
+    depends_on:
+      iceberg-rest: {condition: service_healthy}
+    environment:
+      PHRONEXUS_BACKEND: aerospike
+      PHRONEXUS_AEROSPIKE__HOSTS: aerospike:3000
+      PHRONEXUS_AEROSPIKE__USE_NATIVE_TXN: "false"
+      PHRONEXUS_CONTRACTS__REFRESH_SECONDS: "5"
+      PHRONEXUS_ICEBERG__BACKEND: iceberg
+      PHRONEXUS_ICEBERG__CATALOG_URI: http://iceberg-rest:8181
+      PHRONEXUS_ICEBERG__WAREHOUSE: s3://warehouse/
+      PHRONEXUS_ICEBERG__S3_ENDPOINT: http://minio:9000
+      PHRONEXUS_ICEBERG__S3_REGION: us-east-1
+      PHRONEXUS_ICEBERG__S3_ACCESS_KEY_ID: phronexus
+      PHRONEXUS_ICEBERG__S3_SECRET_ACCESS_KEY: phronexus-secret
+      PHRONEXUS_OBSERVABILITY__LOG_LEVEL: WARNING
+    command: ["python", "-m", "phronexus.retention.validate"]
