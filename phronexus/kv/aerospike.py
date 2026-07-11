@@ -79,7 +79,9 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
         return aerospike.TTL_NEVER_EXPIRE if ttl <= 0 else ttl
 
     def _policy(self, expected_generation, txn):
-        policy: dict[str, Any] = {}
+        # Store the primary key with the record (not just its digest) so scan()
+        # can return the user key — the registry/reaper/relays iterate by key.
+        policy: dict[str, Any] = {"key": aerospike.POLICY_KEY_SEND}
         if expected_generation is not None:
             policy["gen"] = aerospike.POLICY_GEN_EQ
         if txn is not None and getattr(txn, "native", None) is not None:
@@ -137,9 +139,14 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
             raise GenerationConflict(str(exc)) from exc
 
     def scan(self, set_name) -> Iterator[tuple[str, Record]]:
-        scan = self._client.scan(self.namespace, set_name)
-        for (key, meta, bins) in scan.results():
+        # query() with no predicate is a full-set scan (scan() is deprecated in
+        # newer clients). Records carry their user key because writes use
+        # POLICY_KEY_SEND; skip any legacy record that lacks one.
+        q = self._client.query(self.namespace, set_name)
+        for (key, meta, bins) in q.results():
             userkey = key[2]
+            if userkey is None:
+                continue
             yield userkey, Record(bins=bins, generation=meta["gen"], ttl=meta.get("ttl", 0))
 
     def transaction(self) -> TransactionContext:
