@@ -32,25 +32,33 @@ Full docs are in [`docs/`](docs/):
 
 - **[architecture.md](docs/architecture.md)** — mental model, components, write path, state machine (with diagrams).
 - **[building-on-phronexus.md](docs/building-on-phronexus.md)** — developer guide: onboard an entity by config end-to-end, hooks, REST/SDK, evolving contracts.
+- **[api-reference.md](docs/api-reference.md)** — the verbs at a glance: Python, REST, and the remote SDK.
 - **[contracts-reference.md](docs/contracts-reference.md)** — every field of the six contract kinds.
+- **[storage-layouts.md](docs/storage-layouts.md)** — physical storage options: `msgpack`/`bins`/`spread` encodings, `bin_map`, `native_txn`, batch reads.
 - **[state-machine.md](docs/state-machine.md)** — the transactional state machine in depth.
 - **[ccr-reference.md](docs/ccr-reference.md)** — end-to-end reference: the CCR saga, the hot value cube, and the exactly-once scheduler, all as config.
 - **[retention-and-journals.md](docs/retention-and-journals.md)** — insert-only, self-reconciling retention log and the binary msgpack journals.
 - **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, native-client options, TLS/mTLS, auth, observability, ops.
 
-Runnable worked examples: `python examples/bond/run_bond.py` · `python examples/ccr/run_ccr.py` ·
-`python examples/otc_trade/run_otc.py` (validation → ETL → dual-shape storage: a
-msgpack blob in `t_doc` + per-element `bins` in `t_base`, with reference-data DQ
-and named inverted indexes `idx_cp`/`idx_ns`) ·
-`python examples/fvcube/run_fvcube.py` (a future-value cube stored **transposed** —
-each date as its own Aerospike bin, via a `spread` projection) ·
-`python examples/fv_paths/run_fv_paths.py` (the same cube **at scale** — 3 parts ×
-~2000 numbers per date: one record per date, each part its own bin, max per date) ·
-`python examples/library_embed/run_embed.py` (the **whole API embedded as a library** —
-operational store + state-machine node + request/response journal + retention→Iceberg,
-no services) ·
-`python examples/reject_handling/run_reject.py` (what to do when validation fails —
-drop / whole message to a Kafka reject topic / HTTP webhook / a specific message via a hook).
+## Try it (no services)
+
+Every example runs on the built-in in-memory backend — nothing to install but the
+package. Prefix any with `PHRONEXUS_BACKEND=aerospike` to run the same code
+against a live stack (`cd deploy && ./setup.sh` brings one up).
+
+```bash
+python examples/bond/run_bond.py        # onboard an entity by config, end to end
+```
+
+| Example | Shows |
+|---|---|
+| [`bond`](examples/bond) | onboard an entity by config (storage/query/view/validation/transition) |
+| [`ccr`](examples/ccr) | Counterparty-Credit-Risk saga + hot value cube + exactly-once scheduler |
+| [`otc_trade`](examples/otc_trade) | validation → ETL → dual-shape storage (`t_doc` msgpack + `t_base` bins), reference-data DQ, named indexes `idx_cp`/`idx_ns`, batch `find` |
+| [`fvcube`](examples/fvcube) | a future-value cube stored **transposed** — each date its own bin (`spread`) |
+| [`fv_paths`](examples/fv_paths) | the cube **at scale** — 3 parts × ~2000 numbers/date: one record per date, parts as bins, max per date |
+| [`library_embed`](examples/library_embed) | the **whole API embedded as a library** — store + state-machine node + journal + retention→Iceberg, no services |
+| [`reject_handling`](examples/reject_handling) | what to do when validation fails — drop / Kafka reject topic / HTTP webhook / a specific message via a hook |
 All default to the always-available in-memory
 backend (no services); prefix with `PHRONEXUS_BACKEND=aerospike` to run the same
 code against a live Aerospike + Kafka stack.

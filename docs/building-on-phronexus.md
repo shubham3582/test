@@ -68,6 +68,12 @@ Rules the loader enforces: exactly one `canonical` projection with `fields: ["*"
 and its key references only primary-key fields (so a document is always
 addressable by id).
 
+> Projections can do more than a plain map: store the canonical as one **msgpack**
+> blob, land selected elements as their own **Aerospike bins** (`encoding: bins`,
+> renamed via `bin_map`), **transpose** a map field into per-key bins (`spread`),
+> or choose per-entity write transactionality (`native_txn`). See
+> [storage-layouts.md](storage-layouts.md).
+
 ### 2. Query — what's searchable
 
 ```yaml
@@ -239,12 +245,20 @@ The same core is exposed over HTTP (OpenAPI at `/openapi.json`):
 
 | Method & path | Purpose |
 |---|---|
-| `PUT /entities/{entity}/documents` | write |
+| `PUT /entities/{entity}/documents` | write one document |
+| `POST /entities/{entity}/documents/batch` | bulk write (each independently committed) |
 | `GET /entities/{entity}/documents/{id}` | read |
+| `DELETE /entities/{entity}/documents/{id}` | delete (soft/hard per contract) |
+| `GET /entities/{entity}/documents/{id}/trace` | audit/debug: commits, deletes, transitions |
 | `POST /entities/{entity}/validate` | dry-run JSON Schema + DQ |
 | `POST /entities/{entity}/query?view=` | query (optionally through a view) |
 | `POST /entities/{entity}/events` | submit a lifecycle event (sync accept/reject) |
-| `POST /contracts` | publish/activate a contract (admin) |
+| `GET /interactions/{event_id}` | journaled request + response for an event |
+| `GET/PUT/DELETE /schedules` · `POST /schedules/tick` | distributed scheduler admin |
+| `POST /contracts` · `GET /contracts[/{id}]` · `POST /contracts/refresh` | contract admin |
+
+The live, authoritative list is always the OpenAPI spec at `/openapi.json` (Swagger
+UI at `/docs`).
 
 ```python
 from phronexus.sdk import PhronexusClient
@@ -300,6 +314,8 @@ validation, the state machine, and the REST API.
 
 ## Where to next
 
+- [api-reference.md](api-reference.md) — the verbs at a glance (Python / REST / SDK).
 - [contracts-reference.md](contracts-reference.md) — every contract field.
+- [storage-layouts.md](storage-layouts.md) — advanced physical storage: `msgpack`/`bins`/`spread` encodings, per-element bins, batch reads, `native_txn`.
 - [state-machine.md](state-machine.md) — the transactional state machine in depth.
 - [deployment.md](deployment.md) — Aerospike / MSK / S3 Tables, security, ops.

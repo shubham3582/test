@@ -366,7 +366,8 @@ otel_endpoint: http://otel-collector:4317
 ```
 
 - **Structured logs** (`structlog`, JSON) with a per-request `request_id` bound
-  across the API; configurable centrally.
+  across the API; format/level/fields are changed in **one place** —
+  `configure_logging()` — see [logging.md](logging.md).
 - **OpenTelemetry** traces (span per projection write, manifest commit,
   transition) and metrics over OTLP — writes/reads/queries, latency histograms,
   commit-failure rate, `sm.applied/rejected/duplicate/dropped`, validation

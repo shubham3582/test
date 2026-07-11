@@ -27,7 +27,7 @@ def _msk_oauth_cb(region: str) -> Callable[[str], tuple[str, float]]:
         from aws_msk_iam_sasl_signer import MSKAuthTokenProvider
     except ImportError as exc:  # pragma: no cover
         raise ConfigError(
-            "kafka.msk_iam requires aws-msk-iam-sasl-signer: "
+            "kafka.msk_iam requires aws-msk-iam-sasl-signer-python: "
             "pip install 'phronexus-core[msk]'"
         ) from exc
 

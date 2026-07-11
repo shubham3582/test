@@ -25,10 +25,14 @@ phronexus = "phronexus.cli:main"
 [project.optional-dependencies]
 # Backends and integrations are optional so the core + in-memory backend
 # stay importable with a minimal dependency footprint.
-aerospike = ["aerospike>=14.0"]
+aerospike = ["aerospike>=19.0"]                       # latest client (server 7.x/8.x)
 kafka = ["confluent-kafka>=2.3"]
-msk = ["confluent-kafka>=2.3", "aws-msk-iam-sasl-signer>=1.0"]
-iceberg = ["pyiceberg>=0.6", "pyarrow>=15.0"]
+# AWS-managed Kafka (MSK) with IAM auth.
+msk = ["confluent-kafka>=2.3", "aws-msk-iam-sasl-signer-python>=1.0"]
+# Iceberg retention. `iceberg` covers a REST/Glue catalog; `s3tables` adds the
+# AWS deps for Amazon S3 Tables (its Iceberg REST endpoint + S3 data files).
+iceberg = ["pyiceberg>=0.9", "pyarrow>=15.0"]
+s3tables = ["pyiceberg>=0.9", "pyarrow>=15.0", "boto3>=1.34"]
 api = ["fastapi>=0.110", "uvicorn[standard]>=0.29"]
 client = ["httpx>=0.27"]
 oidc = ["pyjwt[crypto]>=2.8", "httpx>=0.27"]
