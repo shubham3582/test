@@ -23,12 +23,12 @@ ready ([deployment.md](deployment.md)).
 
 ## The mental model
 
-You describe an entity with up to **five contracts**; Phronexus does the rest.
+You describe an entity with up to **six contracts**; Phronexus does the rest.
 
 ```mermaid
 flowchart LR
     subgraph Contracts[Contracts for one entity]
-      S[storage] --- Q[query] --- V[view] --- VA[validation] --- T[transition]
+      S[storage] --- Q[query] --- V[view] --- VA[validation] --- T[transition] --- ST[stream]
     end
     Contracts --> ENGINE[Phronexus engine]
     ENGINE --> API[SDK · REST · State machine]

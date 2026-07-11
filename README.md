@@ -7,17 +7,21 @@ searchable, and what each consumer sees are all described by **versioned
 contracts** that live in the datastore and hot-reload, so new business entities
 (trades, FX, repos, …) are onboarded by config, not code.
 
-- **Operational store:** Aerospike (hot path)
-- **Retention store:** Apache Iceberg (optional, async, long-term) — *Phase 4*
+- **Operational store:** Aerospike (hot path) — with a supported escape hatch to native features
+- **Retention store:** Apache Iceberg (optional, async, long-term) — an insert-only, idempotent log
 - **Change feed:** Kafka / Redpanda
-- **Interfaces:** Python SDK + REST (REST is *Phase 3*)
+- **Interfaces:** Python SDK + REST
+- **Also:** a transactional state machine, a distributed exactly-once scheduler, and binary (msgpack) journals
 
-> **Status:** Phases 0–5 complete (feature-complete prototype) — contracts,
-> write/read via the manifest pattern, config-driven inverted-index search,
-> consumer views, REST API + remote SDK with API-key/bearer/mTLS auth, async
-> Iceberg retention off the Kafka change feed, and operational tooling
-> (contract backfill, admin CLI, load harness). Runs today on a built-in
-> in-memory backend (no services required) and on Aerospike.
+> **Status:** feature-complete prototype — contracts, write/read via the
+> manifest pattern, config-driven inverted-index search, consumer views, REST
+> API + remote SDK with API-key/bearer/mTLS auth, a transactional state machine,
+> a distributed exactly-once scheduler, insert-only Iceberg retention off the
+> Kafka change feed, binary msgpack journals, and supported native-Aerospike
+> access — plus operational tooling (contract backfill, admin CLI, load
+> harness). Runs today on a built-in in-memory backend (no services required)
+> and on Aerospike. A full **Counterparty-Credit-Risk reference** is built on it
+> in [`examples/ccr/`](examples/ccr).
 
 ---
 
@@ -27,11 +31,13 @@ Full docs are in [`docs/`](docs/):
 
 - **[architecture.md](docs/architecture.md)** — mental model, components, write path, state machine (with diagrams).
 - **[building-on-phronexus.md](docs/building-on-phronexus.md)** — developer guide: onboard an entity by config end-to-end, hooks, REST/SDK, evolving contracts.
-- **[contracts-reference.md](docs/contracts-reference.md)** — every field of the five contract kinds.
+- **[contracts-reference.md](docs/contracts-reference.md)** — every field of the six contract kinds.
 - **[state-machine.md](docs/state-machine.md)** — the transactional state machine in depth.
-- **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, TLS/mTLS, auth, observability, ops.
+- **[ccr-reference.md](docs/ccr-reference.md)** — end-to-end reference: the CCR saga, the hot value cube, and the exactly-once scheduler, all as config.
+- **[retention-and-journals.md](docs/retention-and-journals.md)** — insert-only, self-reconciling retention log and the binary msgpack journals.
+- **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, native-client options, TLS/mTLS, auth, observability, ops.
 
-Runnable worked example: `python examples/bond/run_bond.py`.
+Runnable worked examples: `python examples/bond/run_bond.py` · `python examples/ccr/run_ccr.py`.
 
 **Management UI:** the API serves a self-contained web console at `/ui` — browse/edit
 contracts (validate-before-save), validate documents, drive state machines, and
@@ -53,7 +59,7 @@ last**. The manifest is the single commit point:
   concurrency across competing writers.
 - Crashed writes leave only invisible orphans, swept by the **reaper**.
 
-## The three contracts
+## The six contract kinds
 
 | Contract | Defines | Example file |
 |----------|---------|--------------|
@@ -86,7 +92,7 @@ always addressable by primary key.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                     # 29 tests, no services needed
+pytest                     # full suite, no services needed
 ```
 
 ```python
@@ -139,6 +145,7 @@ PHRONEXUS_BACKEND=memory python -m phronexus.api.server   # serves on :8080
 | `POST /entities/{entity}/patterns/{name}` | named parameterised query |
 | `GET /entities/{entity}/views/{view}/documents/{id}` | read through a view |
 | `POST /contracts` · `POST /contracts/refresh` | contract admin (admin principal) |
+| `GET/PUT/DELETE /schedules` · `POST /schedules/tick` | scheduler admin (admin principal) |
 | `GET /healthz` · `GET /readyz` | liveness / readiness |
 
 ```python
@@ -156,18 +163,27 @@ additionally require an admin principal. Every request gets a bound `request_id`
 in the structured logs and an `X-Request-ID` response header; OTel FastAPI
 instrumentation attaches when `OTEL_ENABLED=true`.
 
-## Iceberg retention (async, off the change feed)
+## Iceberg retention — an insert-only, idempotent log
 
 Every committed document emits a `CommitEvent` onto the Kafka/Redpanda change
-feed. A separate **retention worker** consumes it and lands rows in the Iceberg
+feed. A separate **retention worker** consumes it and appends to the Iceberg
 table declared by each storage contract's `iceberg` block — only for entities
 that opt in. Aerospike stays the source of truth for the hot path; Iceberg is
 the analytical, long-term tail.
 
-- Upserts are keyed by doc id → **replays are idempotent**.
-- Deletes remove the row; rows carry `_expire_at` from `retention_days` for a
-  maintenance pass to drop aged data.
-- Pins the exact contract version that produced each document.
+Retention is modelled as an **append-only event log** — nothing is mutated in
+place — so it **self-reconciles on replay**:
+
+- Each commit is one immutable row with `_txn` (idempotency key), `_version`
+  (the manifest generation → "latest wins" order), `_op` (upsert / **delete
+  tombstone**), and `_raw` (the exact document as a **msgpack** blob).
+- **Current state is a derived view** — `reconcile()` keeps the max-`_version`
+  row per doc and drops tombstones — so duplicate appends are harmless. The
+  pipeline only needs at-least-once delivery to be correct.
+- The Kafka consumer uses **manual offset commit** (advance only after the batch
+  is flushed), so a crash replays rather than drops.
+
+See [docs/retention-and-journals.md](docs/retention-and-journals.md).
 
 ```bash
 # production: its own process next to the app
@@ -176,6 +192,10 @@ PHRONEXUS_BACKEND=aerospike PHRONEXUS_KAFKA__ENABLED=true \
   PHRONEXUS_ICEBERG__ENABLED=true PHRONEXUS_ICEBERG__BACKEND=iceberg \
   python -m phronexus.retention.main
 ```
+
+Validate the whole path locally (MinIO + Iceberg REST catalog + worker):
+`cd deploy && docker compose --profile iceberg up -d` then
+`docker compose --profile iceberg run --rm iceberg-validate`.
 
 ## Ingestion validation (JSON Schema + data quality)
 
@@ -222,6 +242,65 @@ via the outbox), and an embedded DishtaYantra `CalculationNode`
 (`PhronexusStateMachineNode`). See
 [`docs/state-machine.md`](docs/state-machine.md) and the DAG integration in
 [`docs/integration-dishtayantra.md`](docs/integration-dishtayantra.md).
+
+## Distributed scheduler (exactly-once)
+
+Schedule work (EOD jobs, periodic refreshes) with state stored in Aerospike, so
+**duplicate events can't be generated** no matter how many replicas run. Each
+occurrence is claimed with a **generation-CAS lease**; the winner writes the
+claim and a trigger outbox row in one transaction and relays it to a topic —
+losers get a conflict and skip. Pattern: *kafka topic → the service → it pulls
+what it needs via Phronexus*.
+
+```python
+from phronexus.scheduler import ScheduleSpec
+sch = px.scheduler(output=publisher)
+sch.upsert_schedule(ScheduleSpec(name="ccr-eod", topic="kafka://ccr.eod",
+                                 daily_at="18:30", timezone="America/New_York"))
+```
+
+Run standalone (`python -m phronexus.scheduler.runner`, scale to N replicas),
+manage over REST (`PUT/GET/DELETE /schedules`, admin), or embed `px.scheduler()`.
+See [docs/ccr-reference.md](docs/ccr-reference.md#the-scheduler--eod-exactly-once-across-replicas).
+
+## Binary journals (msgpack)
+
+Persist full messages and request/response pairs as compact **msgpack** blobs —
+a few typed metadata bins for lookup plus one bin holding the whole payload,
+decoded byte-faithfully on read:
+
+- **Message journal** — every raw inbound Kafka message (full envelope).
+- **Request/response journal** — per request, the request and its response as
+  `req` / `resp` blobs; the state machine journals **every `process()`**
+  automatically when enabled.
+
+```python
+rj = px.request_journal()
+rj.read("evt-1")   # {"meta": {...}, "request": <decoded>, "response": <decoded>}
+```
+
+Enable with `journal.enabled` + `journal_messages` / `journal_requests`. See
+[docs/retention-and-journals.md](docs/retention-and-journals.md#binary-journals).
+
+## Native Aerospike access (supported)
+
+The `KVStore` API is deliberately small; for native features it doesn't wrap —
+**expressions, CDT list/map ops, `operate()`, batch, secondary-index queries,
+UDFs** — use the supported accessor. Native client policies (timeouts,
+consistency, rack, pools) pass through via `aerospike.policies` /
+`aerospike.client_config`.
+
+```python
+nx = px.native_aerospike()                       # requires backend='aerospike'
+nx.operate("positions", "acct-1", [lo.list_append("legs", leg)])
+nx.client.batch_read(...)                        # raw connected client
+```
+
+It injects the namespace and **guards Phronexus-managed sets** — a write to the
+manifest, projections, index, outboxes, dedup, schedules, or journals raises, so
+the manifest-last invariant, in-txn index, and change feed can't be bypassed.
+Reads/queries and your own sets are unrestricted. See
+[docs/deployment.md](docs/deployment.md#using-native-aerospike-features-directly-supported-api).
 
 ## Operations
 
@@ -314,12 +393,16 @@ phronexus/
   query/               # inverted index + JSON/YAML query engine
   views/               # consumer view projection (allow-list, mask, transform)
   validation/          # JSON Schema + data-quality validator
+  statemachine/        # transactional state machine (hooks, I/O, node, runner)
+  scheduler/           # distributed exactly-once scheduler (CAS lease)
+  retention/           # insert-only Iceberg log: source, warehouse, worker
   events/              # change-feed sinks (memory, kafka)
+  codec.py             # msgpack pack/unpack (binary envelopes)
+  journal.py           # message + request/response journals
+  native.py            # supported native-Aerospike accessor (managed-set guard)
   observability/       # structured logging + OTel telemetry
   api/                 # FastAPI app, routers, auth, middleware, server
   sdk/                 # PhronexusClient (remote HTTP SDK)
-  retention/           # change-feed source, warehouse, Iceberg worker
-  statemachine/        # transactional state machine (processor, I/O, node, runner)
   admin/               # contract backfill job
   cli.py               # phronexus admin CLI
   core.py              # Phronexus facade (in-process SDK entrypoint)

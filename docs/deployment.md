@@ -14,7 +14,8 @@ flowchart TB
     subgraph svc[Phronexus services]
       API[REST API<br/>uvicorn]
       RUN[State-machine runner<br/>N per partition set]
-      RET[Retention worker]
+      SCH[Scheduler<br/>N replicas · CAS lease]
+      RET[Retention worker<br/>append-only → Iceberg]
     end
     subgraph data[Data plane]
       AERO[(Aerospike 8.x<br/>Enterprise + SC)]
@@ -29,6 +30,8 @@ flowchart TB
     RUN --> AERO
     MSK --> RUN
     RUN -- outbox --> MSK
+    SCH --> AERO
+    SCH -- triggers --> MSK
     MSK --> RET --> S3T
     API -.OTLP.-> OTEL
     RUN -.OTLP.-> OTEL
@@ -41,6 +44,7 @@ flowchart TB
 |---|---|---|
 | REST API | `python -m phronexus.api.server` | replicas behind the LB |
 | State-machine runner | `python -m phronexus.statemachine.runner` | Kafka partitions (key = doc_id) |
+| Scheduler | `python -m phronexus.scheduler.runner` | replicas (CAS lease → exactly-once) |
 | Outbox relay (optional) | `python -m phronexus.statemachine.relay` | replicas (set `statemachine.inline_relay: false`) |
 | Change-feed relay (optional) | `python -m phronexus.changefeed_relay` | replicas (set `changefeed.inline_relay: false`) |
 | Retention worker | `python -m phronexus.retention.main` | consumer group members |
@@ -250,7 +254,7 @@ s3_secret_access_key: "${MINIO_SECRET}"
 Moving to S3 Tables is a config swap (catalog URI + `sigv4_enabled: true` +
 `signing_name`/`signing_region`), no code change. The retention worker creates
 the namespace + table on first use, so no manual DDL is needed in either
-environment. See [deploy/README.md](../../deploy/README.md#validate-the-iceberg--s3-retention-lake).
+environment. See [deploy/README.md](../deploy/README.md#validate-the-iceberg--s3-retention-lake).
 
 ## Security
 

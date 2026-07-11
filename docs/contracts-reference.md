@@ -2,7 +2,7 @@
 
 Every entity concern is described by a versioned contract stored in the
 `_contracts` set. Contracts are JSON/YAML, validated on publish. This page lists
-every field for the five kinds.
+every field for the six kinds.
 
 Common to all: `kind`, `entity`, `version` (integer). Publishing a version and
 flipping its active pointer is what evolves schema without a redeploy; documents

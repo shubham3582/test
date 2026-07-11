@@ -8,7 +8,8 @@ Configuration is layered, highest precedence first:
 3. ``.env`` file
 4. **Per-subsystem YAML files** in a config directory (``aerospike.yaml``,
    ``kafka.yaml``, ``iceberg.yaml``, ``api.yaml``, ``observability.yaml``,
-   ``statemachine.yaml``, ``contracts.yaml``, plus a top-level ``phronexus.yaml``)
+   ``statemachine.yaml``, ``scheduler.yaml``, ``journal.yaml``, ``contracts.yaml``,
+   plus a top-level ``phronexus.yaml``)
 
 So operators keep readable, per-subsystem files under version control and
 override individual values with environment variables at deploy time. Secrets
@@ -345,6 +346,8 @@ _GROUP_FILES = {
     "observability": "observability.yaml",
     "contracts": "contracts.yaml",
     "statemachine": "statemachine.yaml",
+    "scheduler": "scheduler.yaml",
+    "journal": "journal.yaml",
     "reaper": "reaper.yaml",
 }
 

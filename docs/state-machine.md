@@ -59,7 +59,7 @@ key; the manifest generation-CAS is the backstop. Scale horizontally by partitio
 
 ## The transition contract (metadata, not code)
 
-A fourth contract kind. Onboarding a new lifecycle is a config file, like every
+One of the six contract kinds. Onboarding a new lifecycle is a config file, like every
 other entity concern.
 
 ```yaml
@@ -84,7 +84,7 @@ transitions:
 - The field is named `event` (not `on`) because YAML 1.1 parses a bare `on:` key
   as boolean `True`.
 
-## Two faces, one engine
+## Three faces, one engine
 
 | Face | Entry | Use |
 |---|---|---|
@@ -169,7 +169,7 @@ side effects) so the write composes into the larger state-machine transaction.
 
 ## Prototype status
 
-Implemented on the in-memory backend with 10 tests covering: creation, full
+Implemented on the in-memory backend with tests covering: creation, full
 lifecycle, wrong-state rejection (atomic — no partial writes), guard rejection,
 input dedup, wildcard transitions, outbox-drains-after-commit, change-feed flow,
 the node face, and guard sandboxing. Aerospike native transactions are wired for

@@ -4,7 +4,7 @@
 |---|---|
 | [architecture.md](architecture.md) | The mental model, components, the manifest write path, and the state machine — with diagrams. Start here. |
 | [building-on-phronexus.md](building-on-phronexus.md) | Developer guide: onboard a new entity by config end-to-end, extend with hooks, use the REST API/SDK, evolve contracts, test. |
-| [contracts-reference.md](contracts-reference.md) | Field-by-field reference for all five contract kinds (storage, query, view, validation, transition). |
+| [contracts-reference.md](contracts-reference.md) | Field-by-field reference for all six contract kinds (storage, query, view, validation, transition, stream). |
 | [state-machine.md](state-machine.md) | The transactional state machine in depth: atomicity model, hooks, output routing, the three faces. |
 | [ccr-reference.md](ccr-reference.md) | End-to-end reference: Counterparty-Credit-Risk saga, the hot value cube, and the exactly-once scheduler — all as config. |
 | [retention-and-journals.md](retention-and-journals.md) | Insert-only, idempotent retention log (self-reconciling on replay) and the binary msgpack journals for messages and request/response pairs. |

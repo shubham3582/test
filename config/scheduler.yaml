@@ -1,0 +1,10 @@
+# Distributed scheduler (exactly-once firing via an Aerospike CAS lease).
+# Maps to phronexus.config.SchedulerSettings.
+
+poll_seconds: 5.0                       # how often each replica checks for due schedules
+
+# Sets backing the scheduler (state lives in Aerospike so multiple replicas
+# never generate duplicate events).
+schedules_set: _schedules               # schedule definitions
+state_set: _sched_state                 # per-schedule fire state (the CAS lease)
+outbox_set: _sched_outbox               # durable trigger outbox (relayed to topics)

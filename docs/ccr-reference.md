@@ -128,7 +128,8 @@ pulls the data it needs via Phronexus*.
 ```
 
 Run it standalone with `python -m phronexus.scheduler.runner` (one or more
-replicas), manage schedules over REST at `PUT/GET/DELETE /schedules` (admin), or
+replicas), manage schedules over REST (`PUT/GET/DELETE /schedules`, `POST
+/schedules/tick`; admin), or
 embed `px.scheduler()` in your own process. See the exactly-once proof in
 `run_ccr.py` step 5 and in `tests/test_scheduler.py`.
 

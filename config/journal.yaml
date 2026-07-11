@@ -1,0 +1,14 @@
+# Binary (msgpack) journals — full messages + per-request request/response.
+# Maps to phronexus.config.JournalSettings. Disabled by default.
+
+enabled: false
+
+# Persist every raw inbound Kafka message (full envelope) as a msgpack blob.
+journal_messages: false
+messages_set: _messages
+
+# Persist each state-machine request + its response as msgpack blobs.
+journal_requests: false
+interactions_set: _interactions
+
+ttl_seconds: 0                          # 0 = keep forever; set a horizon to auto-expire

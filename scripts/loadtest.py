@@ -74,7 +74,7 @@ def main() -> None:
     print(f"writes : {args.docs:>8,} in {tw:6.2f}s  {rate(args.docs, tw)}")
     print(f"reads  : {args.queries:>8,} in {tr:6.2f}s  {rate(args.queries, tr)}")
     print(f"queries: {args.queries:>8,} in {tq:6.2f}s  {rate(args.queries, tq)}  (avg {hits/max(args.queries,1):.1f} hits)")
-    print(f"retain : {stats['upserts']:>8,} upserts in {tret:6.2f}s  {rate(stats['upserts'], tret)}")
+    print(f"retain : {stats['upserts']:>8,} appends in {tret:6.2f}s  {rate(stats['upserts'], tret)}")
     px.close()
 
 

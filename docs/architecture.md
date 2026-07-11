@@ -25,11 +25,13 @@ flowchart TB
       QRY[Query Engine]
       VIEW[View Engine]
       SM[State Machine<br/>hooks + outbox]
+      SCH[Scheduler<br/>CAS lease · exactly-once]
+      JRN[Journals<br/>msgpack req/resp + messages]
     end
 
     subgraph stores[Stores]
       AERO[(Aerospike<br/>projections · manifest · index · contracts)]
-      ICE[(Iceberg<br/>long-term retention)]
+      ICE[(Iceberg<br/>insert-only retention log)]
     end
 
     KAFKA{{Kafka / MSK<br/>change-feed + events}}
@@ -47,12 +49,15 @@ flowchart TB
     QRY --> MAN
     VIEW --> MAN
     SM --> MAN
+    SM --> JRN --> AERO
+    SCH --> AERO
+    SCH -- trigger --> KAFKA
     MAN -- CommitEvent --> KAFKA
     SM -- outbox --> KAFKA
-    KAFKA -- retention worker --> ICE
+    KAFKA -- retention worker<br/>append-only --> ICE
 ```
 
-The **five contract kinds** drive every layer:
+The **six contract kinds** drive every layer:
 
 | Contract | Drives | Layer |
 |---|---|---|
@@ -61,6 +66,7 @@ The **five contract kinds** drive every layer:
 | `view` | consumer output: allow-list, masking, transforms | View Engine |
 | `validation` | JSON Schema + data-quality checks | Validator |
 | `transition` | state-machine states, guards, emitted events | State Machine |
+| `stream` | JSON Schema on published events (produce-time validation) | State Machine output |
 
 ## The write path (manifest pattern)
 
@@ -141,6 +147,37 @@ Three faces share the same `StateMachine.process()`:
 | Synchronous REST | `POST /entities/{entity}/events` | accept/reject in the HTTP response |
 | Embedded DAG node | `PhronexusStateMachineNode.calculate()` | a DishtaYantra `CalculationNode` |
 
+## Distributed scheduler
+
+Schedules fire **exactly once across replicas**. Each occurrence is claimed with
+a generation-CAS lease on a per-schedule state record; the winner writes the
+claim and a trigger outbox row in one transaction and relays it to a topic,
+losers get a conflict and skip. State lives in Aerospike, so any number of
+replicas can run for availability without generating duplicate events. Runs
+standalone (`python -m phronexus.scheduler.runner`), over REST (`/schedules`), or
+embedded (`px.scheduler()`).
+
+## Insert-only retention + binary journals
+
+The retention worker appends every `CommitEvent` to Iceberg as an **immutable
+row** (`_txn` idempotency key, `_version` order, `_op` incl. delete tombstones,
+`_raw` msgpack blob). Current state is a **derived view** (`reconcile()` — latest
+`_version` per doc, tombstones dropped), so replays are idempotent and the
+consumer only needs at-least-once delivery with **manual offset commit**.
+
+The same **msgpack envelope** convention (metadata bins + one blob) backs the
+journals: a **message journal** (full inbound Kafka message) and a
+**request/response journal** (the state machine records every `process()` when
+enabled) — an audit trail that round-trips byte-faithfully.
+
+## Native access
+
+Beyond the small `KVStore` API, `px.native_aerospike()` exposes native Aerospike
+features (expressions, CDT ops, `operate()`, batch, secondary-index queries,
+UDFs) and **guards Phronexus-managed sets** so direct writes can't bypass the
+manifest. Native client policies pass through via `aerospike.policies` /
+`aerospike.client_config`.
+
 ## Package layout
 
 ```
@@ -154,8 +191,12 @@ phronexus/
   views/               consumer view projection
   validation/          JSON Schema + data-quality validator
   statemachine/        transactional state machine (hooks, I/O, node, runner)
-  retention/           change-feed source, warehouse, Iceberg worker
+  scheduler/           distributed exactly-once scheduler (CAS lease, runner)
+  retention/           insert-only Iceberg log: source, warehouse, worker
   events/              change-feed sinks (memory, kafka)
+  codec.py             msgpack pack/unpack (binary envelopes)
+  journal.py           message + request/response journals
+  native.py            supported native-Aerospike accessor (managed-set guard)
   kafka_client.py      Kafka/MSK client builder (TLS/mTLS/SASL/IAM)
   admin/               contract backfill job
   observability/       structured logging + OTel telemetry

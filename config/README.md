@@ -12,6 +12,8 @@ Per-subsystem configuration files. Each maps to a settings group in
 | `api.yaml` | REST server + auth | server TLS/mTLS + API-key/bearer/mTLS auth |
 | `observability.yaml` | logging + OpenTelemetry | — |
 | `statemachine.yaml` | transactional state machine | — |
+| `scheduler.yaml` | distributed exactly-once scheduler | — |
+| `journal.yaml` | binary msgpack journals (messages + request/response) | — |
 
 ## Enabling
 
