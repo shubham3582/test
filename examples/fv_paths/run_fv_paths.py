@@ -47,8 +47,11 @@ def main() -> None:
     tenors = [1, 7, 30, 90, 365]      # 5 future dates, each a separate record
     print(f"ingesting {len(tenors)} dates x 3 parts x {N_PATHS} numbers "
           f"for CCR-T-001 / BASE ...")
-    for t in tenors:
-        px.put("fv_point", etl_point("CCR-T-001", "BASE", as_of, t, ccy))
+    # Bulk write: all per-date points in one call (each independently committed,
+    # the change feed relayed once at the end).
+    points = [etl_point("CCR-T-001", "BASE", as_of, t, ccy) for t in tenors]
+    ids = px.put_many("fv_point", points)
+    print(f"  px.put_many wrote {len(ids)} points in one call")
 
     # --- one date's physical record: parts as separate bins + a max bin --------
     one = etl_point("CCR-T-001", "BASE", as_of, 1, ccy)["val_date"]

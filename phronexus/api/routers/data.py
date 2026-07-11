@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends
 from phronexus.api.auth import Principal
 from phronexus.api.deps import get_px, require_principal
 from phronexus.api.schemas import (
+    BatchWriteRequest,
+    BatchWriteResponse,
     DocumentsResponse,
     PatternRequest,
     QueryRequest,
@@ -25,6 +27,14 @@ router = APIRouter(tags=["data"], dependencies=[Depends(require_principal)])
 def write(entity: str, body: WriteRequest, px: Phronexus = Depends(get_px)) -> WriteResponse:
     doc_id = px.put(entity, body.document)
     return WriteResponse(entity=entity, doc_id=doc_id)
+
+
+@router.post("/entities/{entity}/documents/batch", response_model=BatchWriteResponse)
+def write_batch(entity: str, body: BatchWriteRequest, px: Phronexus = Depends(get_px)) -> BatchWriteResponse:
+    """Bulk-write documents. Each is a durable, independently-committed manifest
+    write (its own CAS); the change feed is relayed once at the end."""
+    doc_ids = px.put_many(entity, body.documents)
+    return BatchWriteResponse(entity=entity, doc_ids=doc_ids, count=len(doc_ids))
 
 
 @router.post("/entities/{entity}/validate", response_model=ValidationReportResponse)

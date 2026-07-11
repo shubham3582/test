@@ -53,6 +53,12 @@ class PhronexusClient:
         r = self._request("PUT", f"/entities/{entity}/documents", json={"document": document})
         return r["doc_id"]
 
+    def put_many(self, entity: str, documents: list[dict[str, Any]]) -> list[str]:
+        """Bulk-write documents in one request (each independently committed)."""
+        r = self._request("POST", f"/entities/{entity}/documents/batch",
+                           json={"documents": documents})
+        return r["doc_ids"]
+
     def get(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
         try:
             return self._request("GET", f"/entities/{entity}/documents/{doc_id}")

@@ -18,6 +18,8 @@ PHRONEXUS_BACKEND=aerospike python examples/fv_paths/run_fv_paths.py  # live sta
 No new framework feature is needed — it's `encoding: bins` + `bin_map` applied at
 the right storage grain. The `max` is an aggregate, so it's derived in ETL (a
 write hook could do it instead); the storage contract owns the physical layout.
+The per-date points are ingested with **`px.put_many`** — one bulk call, each
+point independently committed, the change feed relayed once.
 
 If a single part is itself too large or needs its own lifecycle, split further:
 make the part the grain (`primary_key: [trade_id, scenario_id, val_date, part]`),

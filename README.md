@@ -144,8 +144,12 @@ For loading many documents, `put_many` commits each as its own durable manifest
 write but relays the change-feed **once** at the end:
 
 ```python
-px.put_many("trade", trades)     # e.g. 500K trades
+px.put_many("trade", trades)                 # e.g. 500K trades
 ```
+
+Also over REST (`POST /entities/{entity}/documents/batch`) and the remote SDK
+(`client.put_many(entity, docs)`). Each document is committed independently (its
+own manifest CAS), so a bad document can't fail the whole batch.
 
 Posting lists are **segmented** (bounded-size head, sealed on fill), so ingesting
 documents that share an indexed value stays **O(N)**, not O(N²) — 500K trades

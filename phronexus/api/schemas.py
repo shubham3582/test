@@ -18,6 +18,16 @@ class WriteResponse(BaseModel):
     doc_id: str
 
 
+class BatchWriteRequest(BaseModel):
+    documents: list[dict[str, Any]]
+
+
+class BatchWriteResponse(BaseModel):
+    entity: str
+    doc_ids: list[str]
+    count: int
+
+
 class SortKeyModel(BaseModel):
     field: str
     order: str = "asc"
