@@ -1,0 +1,16 @@
+kind: query
+entity: bond
+version: 1
+searchable:
+  - {field: issuer, index: string}
+  - {field: currency, index: string}
+  - {field: coupon, index: numeric}
+  - {field: maturity_date, index: numeric}
+patterns:
+  - name: by_issuer
+    where:
+      - {field: issuer, op: eq, value: "${issuer}"}
+  - name: issuer_min_coupon
+    where:
+      - {field: issuer, op: eq, value: "${issuer}"}
+      - {field: coupon, op: gte, value: "${min_coupon}"}

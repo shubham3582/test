@@ -1,0 +1,22 @@
+kind: transition
+entity: bond
+version: 1
+state_field: status
+inputs: ["kafka://bonds.events"]
+transitions:
+  - event: BondIssued
+    from: null
+    to: active
+    emit:
+      - {topic: "kafka://bonds.active", type: BondActivated}
+  - event: BondCalled
+    from: active
+    to: called
+    guard: "callable == True"
+    emit:
+      - {topic: "kafka://bonds.called", type: BondCalled}
+  - event: BondMatured
+    from: active
+    to: matured
+    emit:
+      - {topic: "kafka://bonds.matured", type: BondMatured}

@@ -1,0 +1,7 @@
+kind: view
+entity: bond
+view: desk
+version: 1
+fields: [isin, issuer, coupon, currency, maturity_date, status]
+transform:
+  coupon: round2

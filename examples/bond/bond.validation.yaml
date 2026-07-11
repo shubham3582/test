@@ -1,0 +1,19 @@
+kind: validation
+entity: bond
+version: 1
+mode: enforce
+json_schema:
+  type: object
+  required: [isin, issuer, coupon, currency, maturity_date]
+  properties:
+    isin: {type: string, minLength: 12, maxLength: 12}
+    issuer: {type: string, minLength: 1}
+    coupon: {type: number}
+    currency: {type: string}
+    maturity_date: {type: integer}
+    callable: {type: boolean}
+  additionalProperties: true
+dq_checks:
+  - {name: coupon_range, expr: "coupon >= 0 and coupon <= 30", severity: error}
+  - {name: ccy_supported, field: currency, in: [USD, EUR, GBP], severity: error}
+  - {name: isin_format, field: isin, regex: "^[A-Z]{2}[A-Z0-9]{9}[0-9]$", severity: error}

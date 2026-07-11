@@ -1,0 +1,23 @@
+kind: storage
+entity: bond
+version: 1
+primary_key: [isin]
+manifest_set: bond_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: main
+    set: bond_main
+    key: "{isin}"
+    fields: ["*"]
+    canonical: true
+    ttl: 0
+  - name: by_issuer
+    set: bond_by_issuer
+    key: "{issuer}:{isin}"
+    fields: [isin, issuer, coupon, currency, maturity_date, status]
+iceberg:
+  enabled: true
+  table: warehouse.bonds
+  partition_by: [maturity_date]
+  retention_days: 3650

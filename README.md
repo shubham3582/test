@@ -21,6 +21,18 @@ contracts** that live in the datastore and hot-reload, so new business entities
 
 ---
 
+## Documentation
+
+Full docs are in [`docs/`](docs/):
+
+- **[architecture.md](docs/architecture.md)** — mental model, components, write path, state machine (with diagrams).
+- **[building-on-phronexus.md](docs/building-on-phronexus.md)** — developer guide: onboard an entity by config end-to-end, hooks, REST/SDK, evolving contracts.
+- **[contracts-reference.md](docs/contracts-reference.md)** — every field of the five contract kinds.
+- **[state-machine.md](docs/state-machine.md)** — the transactional state machine in depth.
+- **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, TLS/mTLS, auth, observability, ops.
+
+Runnable worked example: `python examples/bond/run_bond.py`.
+
 ## Why manifests
 
 Aerospike gives strong single-record operations but no free cross-record
