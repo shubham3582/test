@@ -60,7 +60,10 @@ services:
       # Fast contract-cache refresh so ingested contracts show up quickly.
       PHRONEXUS_CONTRACTS__REFRESH_SECONDS: "5"
       PHRONEXUS_OBSERVABILITY__LOG_LEVEL: INFO
-      PHRONEXUS_API__AUTH__SCHEMES: '["none"]'
+      # Management UI + API auth (JWT login). CHANGE these for anything real.
+      PHRONEXUS_API__AUTH__SCHEMES: '["jwt"]'
+      PHRONEXUS_API__AUTH__JWT_SECRET: local-dev-change-me
+      PHRONEXUS_API__AUTH__USERS: '{"admin":{"password":"admin","roles":["admin"]}}'
       PHRONEXUS_STATEMACHINE__DLQ_TOPIC: kafka://phronexus.dlq
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]

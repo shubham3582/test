@@ -46,6 +46,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["phronexus*"]
 
+[tool.setuptools.package-data]
+"phronexus.api.ui" = ["*.html", "*.css", "*.js"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

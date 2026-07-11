@@ -135,6 +135,19 @@ class Phronexus:
         """Fetch one stored contract by identity (e.g. 'storage:trade:v1')."""
         return self.registry.get_version(identity).model_dump(mode="json", by_alias=True)
 
+    def validate_contract(self, doc: dict) -> dict:
+        """Dry-run a contract: parse + compatibility check, without publishing."""
+        from phronexus.contracts.models import StorageContract
+        from phronexus.errors import PhronexusError
+
+        try:
+            c = parse_contract(doc)
+            if isinstance(c, StorageContract):
+                self.registry._check_storage_compatible(c)  # noqa: SLF001
+            return {"ok": True, "identity": c.identity(), "kind": c.kind.value}
+        except PhronexusError as exc:
+            return {"ok": False, "errors": [str(exc)]}
+
     # --- data plane -----------------------------------------------------
 
     def put(self, entity: str, document: dict[str, Any]) -> str:

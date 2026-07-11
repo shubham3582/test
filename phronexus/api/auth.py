@@ -20,6 +20,7 @@ from phronexus.config import AuthSettings
 class Principal:
     name: str
     scheme: str
+    roles: tuple[str, ...] = ()
 
     @property
     def is_anonymous(self) -> bool:
@@ -57,6 +58,20 @@ class Authenticator:
                 if token in self.cfg.bearer_tokens:
                     return Principal(name=self.cfg.bearer_tokens[token], scheme="bearer")
             return None
+        if scheme == "jwt":
+            auth = conn.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                from phronexus.api import jwt as _jwt
+
+                try:
+                    payload = _jwt.decode(auth[7:], self.cfg.jwt_secret)
+                except _jwt.JWTError:
+                    return None
+                return Principal(
+                    name=payload.get("sub", "?"), scheme="jwt",
+                    roles=tuple(payload.get("roles", [])),
+                )
+            return None
         if scheme == "mtls":
             cn = self._client_cn(conn)
             if cn is None:
@@ -85,5 +100,12 @@ class Authenticator:
         return None
 
     def is_admin(self, principal: Principal) -> bool:
+        if "admin" in principal.roles:
+            return True
         admins = self.cfg.admin_principals
-        return not admins or principal.name in admins
+        if admins:
+            return principal.name in admins
+        # No explicit admin list: allow principals that carry no roles (dev /
+        # "none" / api-key), but a role-bearing principal (e.g. a JWT viewer)
+        # must hold the "admin" role.
+        return not principal.roles

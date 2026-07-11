@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Phronexus Console</title>
+<style>
+  :root {
+    --bg:#0f1420; --panel:#161d2b; --panel2:#1d2636; --line:#2a3446;
+    --fg:#e6ebf2; --muted:#8b97ab; --accent:#4f8cff; --ok:#2ecc71; --warn:#f1c40f; --err:#ff5c6c;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:var(--sans); background:var(--bg); color:var(--fg); }
+  a { color:var(--accent); }
+  button { font-family:var(--sans); cursor:pointer; border:1px solid var(--line); background:var(--panel2);
+    color:var(--fg); padding:8px 14px; border-radius:8px; font-size:13px; }
+  button:hover:not(:disabled){ border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  input, select, textarea { font-family:var(--sans); background:var(--panel); color:var(--fg);
+    border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; width:100%; }
+  textarea { font-family:var(--mono); min-height:260px; resize:vertical; line-height:1.5; }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  .row { display:flex; gap:10px; }
+  .row > * { flex:1; }
+  .pill { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line);
+    color:var(--muted); }
+  .badge { font-size:11px; padding:2px 8px; border-radius:6px; font-weight:600; }
+  .badge.ok{ background:rgba(46,204,113,.15); color:var(--ok); }
+  .badge.err{ background:rgba(255,92,108,.15); color:var(--err); }
+  .badge.warn{ background:rgba(241,196,15,.15); color:var(--warn); }
+  /* login */
+  #login { display:flex; align-items:center; justify-content:center; height:100vh; }
+  #login .card { width:340px; background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:28px; }
+  .brand { font-weight:800; font-size:20px; letter-spacing:.3px; }
+  .brand span { color:var(--accent); }
+  .muted { color:var(--muted); font-size:12px; }
+  /* app */
+  #app { display:none; grid-template-columns:220px 1fr; height:100vh; }
+  #side { background:var(--panel); border-right:1px solid var(--line); padding:16px; display:flex; flex-direction:column; }
+  #side .nav { margin-top:18px; display:flex; flex-direction:column; gap:4px; }
+  #side .nav button { text-align:left; background:transparent; border:none; padding:10px 12px; border-radius:8px; color:var(--muted); }
+  #side .nav button.active { background:var(--panel2); color:var(--fg); }
+  #side .who { margin-top:auto; font-size:12px; color:var(--muted); }
+  #main { overflow:auto; padding:22px 26px; }
+  h2 { margin:0 0 4px; font-size:18px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:16px; }
+  .cols { display:grid; grid-template-columns:300px 1fr; gap:20px; }
+  .list { border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .list .g { padding:8px 12px; background:var(--panel2); font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); }
+  .list .item { padding:8px 12px; border-top:1px solid var(--line); font-family:var(--mono); font-size:12px; cursor:pointer; }
+  .list .item:hover { background:var(--panel2); }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; }
+  .result { margin-top:12px; padding:12px; border-radius:8px; font-family:var(--mono); font-size:12px; white-space:pre-wrap;
+    background:var(--panel2); border:1px solid var(--line); max-height:320px; overflow:auto; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); font-family:var(--mono); }
+  th { color:var(--muted); font-weight:600; }
+  .toolbar { display:flex; gap:10px; align-items:center; margin:12px 0; }
+  .spacer{ flex:1; }
+  .err-text { color:var(--err); }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="card">
+    <div class="brand">Phron<span>e</span>xus</div>
+    <div class="muted" style="margin-top:4px">Management Console</div>
+    <div id="ssoNote" class="muted" style="margin-top:14px; display:none"></div>
+    <label>Username</label><input id="u" autocomplete="username" />
+    <label>Password</label><input id="p" type="password" autocomplete="current-password" />
+    <div id="loginErr" class="err-text" style="font-size:12px; margin-top:8px"></div>
+    <button class="primary" style="width:100%; margin-top:16px" onclick="doLogin()">Sign in</button>
+  </div>
+</div>
+
+<div id="app">
+  <div id="side">
+    <div class="brand">Phron<span>e</span>xus</div>
+    <div class="nav" id="nav"></div>
+    <div class="who">
+      <div id="whoName"></div>
+      <button style="margin-top:8px; width:100%" onclick="logout()">Sign out</button>
+    </div>
+  </div>
+  <div id="main"></div>
+</div>
+
+<script>
+const S = { token:null, user:null, roles:[], view:'contracts', contracts:{contracts:[],active:{}}, current:null, saveOk:false };
+const VIEWS = [['contracts','Contracts'],['validate','Document Validator'],['sm','State Machine'],['data','Data Browser']];
+const KINDS = ['storage','query','view','validation','transition','stream'];
+
+const TEMPLATES = {
+  storage: {kind:'storage', entity:'myentity', version:1, primary_key:['id'], manifest_set:'myentity_manifest',
+    update_policy:'upsert', delete_policy:'soft',
+    projections:[{name:'main', set:'myentity_main', key:'{id}', fields:['*'], canonical:true}],
+    iceberg:{enabled:false}},
+  query: {kind:'query', entity:'myentity', version:1,
+    searchable:[{field:'name', index:'string'}],
+    patterns:[{name:'by_name', where:[{field:'name', op:'eq', value:'${name}'}]}]},
+  view: {kind:'view', entity:'myentity', view:'default', version:1, fields:['id','name'], mask:[], transform:{}},
+  validation: {kind:'validation', entity:'myentity', version:1, mode:'enforce',
+    json_schema:{type:'object', required:['id'], properties:{id:{type:'string'}}},
+    dq_checks:[{name:'id_present', field:'id', required:true, severity:'error'}]},
+  transition: {kind:'transition', entity:'myentity', version:1, state_field:'status',
+    transitions:[{event:'Created', from:null, to:'active', emit:[{topic:'kafka://myentity.active'}]}]},
+  stream: {kind:'stream', entity:'myentity', version:1, mode:'enforce',
+    events:[{type:'Created', json_schema:{type:'object', required:['id']}}]},
+};
+
+// ---- auth + api ----
+async function api(path, opts={}) {
+  const h = Object.assign({'content-type':'application/json'}, opts.headers||{});
+  if (S.token) h['Authorization'] = 'Bearer '+S.token;
+  const r = await fetch(path, Object.assign({}, opts, {headers:h}));
+  if (r.status === 401) { logout(); throw new Error('unauthorized'); }
+  const text = await r.text();
+  let body; try { body = text ? JSON.parse(text) : {}; } catch { body = {raw:text}; }
+  if (!r.ok) throw Object.assign(new Error(body.detail||('HTTP '+r.status)), {status:r.status, body});
+  return body;
+}
+
+async function doLogin() {
+  const el = document.getElementById('loginErr'); el.textContent='';
+  try {
+    const r = await api('/auth/login', {method:'POST', body:JSON.stringify({
+      username:document.getElementById('u').value, password:document.getElementById('p').value })});
+    S.token=r.token; S.user=r.principal; S.roles=r.roles;
+    sessionStorage.setItem('phx', JSON.stringify({token:r.token, user:r.principal, roles:r.roles}));
+    showApp();
+  } catch(e){ el.textContent = e.body?.detail || 'Sign-in failed'; }
+}
+function logout(){ S.token=null; sessionStorage.removeItem('phx');
+  document.getElementById('app').style.display='none'; document.getElementById('login').style.display='flex'; }
+
+async function showApp() {
+  document.getElementById('login').style.display='none';
+  document.getElementById('app').style.display='grid';
+  document.getElementById('whoName').innerHTML = '<b>'+S.user+'</b><br><span class="muted">'+(S.roles.join(', ')||'user')+'</span>';
+  const nav = document.getElementById('nav'); nav.innerHTML='';
+  VIEWS.forEach(([id,label])=>{ const b=document.createElement('button'); b.textContent=label;
+    b.className = S.view===id?'active':''; b.onclick=()=>{ S.view=id; showApp(); }; nav.appendChild(b); });
+  ({contracts:renderContracts, validate:renderValidate, sm:renderSM, data:renderData}[S.view])();
+}
+
+// ---- Contracts ----
+async function renderContracts() {
+  const m = document.getElementById('main');
+  m.innerHTML = `<h2>Contracts</h2><div class="sub">Aerospike is the source of truth. Validate before saving.</div>
+    <div class="cols"><div id="clist"></div><div id="ceditor"></div></div>`;
+  try { S.contracts = await api('/contracts'); } catch(e){ S.contracts={contracts:[],active:{}}; }
+  const byKind = {}; (S.contracts.contracts||[]).forEach(id=>{ const k=id.split(':')[0]; (byKind[k]=byKind[k]||[]).push(id); });
+  let html='<div class="list">';
+  KINDS.forEach(k=>{ if(!byKind[k]) return; html+='<div class="g">'+k+'</div>';
+    byKind[k].forEach(id=> html+='<div class="item" onclick="loadContract(\''+id+'\')">'+id+'</div>'); });
+  html+='</div>';
+  document.getElementById('clist').innerHTML = html || '<div class="muted">No contracts yet.</div>';
+  editorPanel(null);
+}
+
+function editorPanel(doc) {
+  S.saveOk=false;
+  const kindSel = KINDS.map(k=>'<option value="'+k+'">'+k+'</option>').join('');
+  document.getElementById('ceditor').innerHTML = `<div class="card">
+    <div class="row"><div><label>New from template</label>
+      <select id="tmpl"><option value="">— pick a kind —</option>${kindSel}</select></div>
+      <div style="max-width:120px; align-self:end"><button onclick="loadTemplate()">Load</button></div></div>
+    <label>Contract (JSON)</label>
+    <textarea id="cjson" oninput="S.saveOk=false; syncSave()">${doc?escapeHtml(JSON.stringify(doc,null,2)):''}</textarea>
+    <div class="toolbar">
+      <button onclick="validateContract()">Validate</button>
+      <button id="saveBtn" class="primary" disabled onclick="saveContract()">Save</button>
+      <div class="spacer"></div>
+      <label style="margin:0"><input type="checkbox" id="force" style="width:auto"> force (override compat)</label>
+    </div>
+    <div id="cresult"></div></div>`;
+  syncSave();
+}
+function loadTemplate(){ const k=document.getElementById('tmpl').value; if(!k) return;
+  document.getElementById('cjson').value = JSON.stringify(TEMPLATES[k],null,2); S.saveOk=false; syncSave();
+  document.getElementById('cresult').innerHTML=''; }
+async function loadContract(id){ try{ const doc=await api('/contracts/'+encodeURIComponent(id)); editorPanel(doc);}catch(e){} }
+function syncSave(){ const b=document.getElementById('saveBtn'); if(b) b.disabled=!S.saveOk; }
+
+function parseEditor(){ return JSON.parse(document.getElementById('cjson').value); }
+async function validateContract(){
+  const out=document.getElementById('cresult');
+  let doc; try{ doc=parseEditor(); }catch(e){ out.innerHTML=res(false,['Invalid JSON: '+e.message]); return; }
+  try {
+    const r = await api('/contracts/validate', {method:'POST', body:JSON.stringify(doc)});
+    S.saveOk = !!r.ok; syncSave();
+    out.innerHTML = r.ok ? res(true, ['Valid — '+r.identity]) : res(false, r.errors||['invalid']);
+  } catch(e){ S.saveOk=false; syncSave(); out.innerHTML=res(false,[e.body?.detail||e.message]); }
+}
+async function saveContract(){
+  const out=document.getElementById('cresult'); let doc; try{ doc=parseEditor(); }catch(e){ return; }
+  const force = document.getElementById('force').checked;
+  try {
+    const r = await api('/contracts?force='+force, {method:'POST', body:JSON.stringify(doc)});
+    out.innerHTML = res(true, ['Saved & activated — '+r.published]);
+    renderContracts();
+  } catch(e){ out.innerHTML = res(false, e.body?.errors || [e.body?.detail||e.message]); }
+}
+
+// ---- Document validator ----
+function renderValidate(){
+  document.getElementById('main').innerHTML = `<h2>Document Validator</h2>
+    <div class="sub">Run JSON Schema + data-quality checks against an entity's validation contract.</div>
+    <div class="card" style="max-width:820px">
+      <label>Entity</label><input id="vent" placeholder="e.g. bond" />
+      <label>Document (JSON)</label><textarea id="vdoc">{
+}</textarea>
+      <div class="toolbar"><button class="primary" onclick="validateDoc()">Validate</button></div>
+      <div id="vresult"></div></div>`;
+}
+async function validateDoc(){
+  const out=document.getElementById('vresult'); let doc;
+  try{ doc=JSON.parse(document.getElementById('vdoc').value);}catch(e){ out.innerHTML=res(false,['Invalid JSON: '+e.message]); return; }
+  try{ const r=await api('/entities/'+encodeURIComponent(document.getElementById('vent').value)+'/validate',
+        {method:'POST', body:JSON.stringify({document:doc})});
+    let lines=[]; if(r.ok) lines.push('OK'); (r.errors||[]).forEach(e=>lines.push('✗ '+e)); (r.warnings||[]).forEach(w=>lines.push('⚠ '+w));
+    out.innerHTML = res(r.ok, lines);
+  }catch(e){ out.innerHTML=res(false,[e.body?.detail||e.message]); }
+}
+
+// ---- State machine ----
+async function renderSM(){
+  const m=document.getElementById('main');
+  m.innerHTML = `<h2>State Machine</h2><div class="sub">Inspect lifecycles and submit events (synchronous accept/reject).</div>
+    <label style="max-width:320px">Transition contract</label>
+    <div class="row" style="max-width:320px"><select id="tc" onchange="loadTransitions()"></select></div>
+    <div id="tcview" style="margin-top:16px"></div>
+    <div class="card" style="margin-top:18px; max-width:820px"><h2 style="font-size:15px">Event console</h2>
+      <div class="row"><div><label>Entity</label><input id="eent"/></div>
+        <div><label>Event type</label><input id="etype"/></div></div>
+      <div class="row"><div><label>Key (doc id)</label><input id="ekey"/></div>
+        <div><label>Event id</label><input id="eid"/></div></div>
+      <label>Payload (JSON)</label><textarea id="epayload" style="min-height:140px">{
+}</textarea>
+      <div class="toolbar"><button class="primary" onclick="submitEvent()">Submit event</button></div>
+      <div id="eresult"></div></div>`;
+  try{ if(!S.contracts.contracts) S.contracts=await api('/contracts'); }catch(e){}
+  const tcs=(S.contracts.contracts||[]).filter(id=>id.startsWith('transition:'));
+  document.getElementById('tc').innerHTML = '<option value="">—</option>'+tcs.map(id=>'<option>'+id+'</option>').join('');
+}
+async function loadTransitions(){
+  const id=document.getElementById('tc').value; const v=document.getElementById('tcview'); if(!id){ v.innerHTML=''; return; }
+  const c=await api('/contracts/'+encodeURIComponent(id));
+  document.getElementById('eent').value=c.entity;
+  let rows=(c.transitions||[]).map(t=>`<tr><td>${t.event}</td><td>${t.from===null?'∅':t.from}</td><td>${t.to}</td>
+    <td>${t.guard||''}</td><td>${(t.emit||[]).map(e=>e.topic).join('<br>')}</td></tr>`).join('');
+  v.innerHTML = `<div class="card"><table><tr><th>event</th><th>from</th><th>to</th><th>guard</th><th>emit</th></tr>${rows}</table></div>`;
+}
+async function submitEvent(){
+  const out=document.getElementById('eresult'); let payload;
+  try{ payload=JSON.parse(document.getElementById('epayload').value);}catch(e){ out.innerHTML=res(false,['Invalid payload JSON']); return; }
+  const ent=document.getElementById('eent').value;
+  const body={event_type:document.getElementById('etype').value, key:document.getElementById('ekey').value,
+    event_id:document.getElementById('eid').value||undefined, payload};
+  try{
+    const r=await fetch('/entities/'+encodeURIComponent(ent)+'/events',{method:'POST',
+      headers:{'content-type':'application/json','Authorization':'Bearer '+S.token}, body:JSON.stringify(body)});
+    const j=await r.json();
+    const good = j.status==='applied'||j.status==='duplicate';
+    out.innerHTML = res(good, [j.status.toUpperCase()+(j.to_state?(' → '+j.to_state):''),
+      j.reason?('reason: '+j.reason):null, (j.emitted&&j.emitted.length)?('emitted: '+j.emitted.join(', ')):null].filter(Boolean));
+  }catch(e){ out.innerHTML=res(false,[e.message]); }
+}
+
+// ---- Data browser ----
+function renderData(){
+  document.getElementById('main').innerHTML = `<h2>Data Browser</h2><div class="sub">Read by id, or run a query.</div>
+    <div class="card" style="max-width:820px"><h2 style="font-size:15px">Read by id</h2>
+      <div class="row"><div><label>Entity</label><input id="rent"/></div><div><label>Doc id</label><input id="rid"/></div></div>
+      <div class="toolbar"><button class="primary" onclick="readDoc()">Read</button></div><div id="rresult"></div></div>
+    <div class="card" style="max-width:820px; margin-top:16px"><h2 style="font-size:15px">Query</h2>
+      <div class="row"><div><label>Entity</label><input id="qent"/></div></div>
+      <label>where (JSON array of {field,op,value})</label><textarea id="qwhere" style="min-height:120px">[]</textarea>
+      <div class="toolbar"><button class="primary" onclick="runQuery()">Query</button></div><div id="qresult"></div></div>`;
+}
+async function readDoc(){ const out=document.getElementById('rresult');
+  try{ const d=await api('/entities/'+encodeURIComponent(document.getElementById('rent').value)+'/documents/'+encodeURIComponent(document.getElementById('rid').value));
+    out.innerHTML='<div class="result">'+escapeHtml(JSON.stringify(d,null,2))+'</div>'; }
+  catch(e){ out.innerHTML=res(false,[e.body?.detail||e.message]); } }
+async function runQuery(){ const out=document.getElementById('qresult'); let where;
+  try{ where=JSON.parse(document.getElementById('qwhere').value);}catch(e){ out.innerHTML=res(false,['Invalid JSON']); return; }
+  try{ const r=await api('/entities/'+encodeURIComponent(document.getElementById('qent').value)+'/query',
+        {method:'POST', body:JSON.stringify({where})});
+    out.innerHTML='<div class="result">'+escapeHtml(JSON.stringify(r,null,2))+'</div>'; }
+  catch(e){ out.innerHTML=res(false,[e.body?.detail||e.message]); } }
+
+// ---- helpers ----
+function res(ok, lines){ const b='<span class="badge '+(ok?'ok':'err')+'">'+(ok?'OK':'FAILED')+'</span>';
+  return '<div class="result">'+b+'\n'+lines.map(escapeHtml).join('\n')+'</div>'; }
+function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+
+// ---- boot ----
+(async function(){
+  try { const cfg=await (await fetch('/auth/config')).json();
+    if(cfg.oidc_enabled){ const n=document.getElementById('ssoNote'); n.style.display='block';
+      n.textContent='SSO (Microsoft Entra) is enabled for this deployment.'; } } catch(e){}
+  const saved=sessionStorage.getItem('phx');
+  if(saved){ const s=JSON.parse(saved); S.token=s.token; S.user=s.user; S.roles=s.roles;
+    try{ await api('/auth/me'); showApp(); return; }catch(e){} }
+  document.getElementById('login').style.display='flex';
+})();
+</script>
+</body>
+</html>

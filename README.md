@@ -33,6 +33,11 @@ Full docs are in [`docs/`](docs/):
 
 Runnable worked example: `python examples/bond/run_bond.py`.
 
+**Management UI:** the API serves a self-contained web console at `/ui` — browse/edit
+contracts (validate-before-save), validate documents, drive state machines, and
+browse data, behind JWT login (fixed users now; Microsoft Entra / Azure AD via the
+OIDC provider seam). See [docs/deployment.md](docs/deployment.md#management-ui).
+
 ## Why manifests
 
 Aerospike gives strong single-record operations but no free cross-record

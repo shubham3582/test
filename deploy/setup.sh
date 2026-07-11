@@ -25,30 +25,37 @@ for i in $(seq 1 60); do
   sleep 2
 done
 
+say "Signing in (default creds admin/admin — change in docker-compose.yml)"
+TOKEN=$(curl -fsS -X POST "$API/auth/login" -H 'content-type: application/json' \
+  -d '{"username":"admin","password":"admin"}' | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+[ -n "$TOKEN" ] && ok "logged in (JWT issued)" || { echo "login failed"; exit 1; }
+AUTH=(-H "Authorization: Bearer $TOKEN")
+
 say "Ingesting contracts into Aerospike (source of truth)"
 docker compose exec -T phronexus-api python -m phronexus.cli ingest examples/bond >/dev/null
 docker compose exec -T phronexus-api python -m phronexus.cli ingest contracts_examples >/dev/null
-curl -fsS -X POST "$API/contracts/refresh" >/dev/null
+curl -fsS "${AUTH[@]}" -X POST "$API/contracts/refresh" >/dev/null
 ok "contracts ingested and cache refreshed"
-echo "  stored contracts:"; curl -fsS "$API/contracts" | sed 's/,/,\n   /g' | head -20
+echo "  stored contracts:"; curl -fsS "${AUTH[@]}" "$API/contracts" | sed 's/,/,\n   /g' | head -20
 
 BOND='{"document":{"isin":"US0378331005","issuer":"APPLE","coupon":3.85,"currency":"USD","maturity_date":20310215,"callable":true}}'
 
 say "Smoke test"
 echo "-- validate (JSON Schema + DQ):"
-curl -fsS -X POST "$API/entities/bond/validate" -H 'content-type: application/json' -d "$BOND"; echo
+curl -fsS "${AUTH[@]}" -X POST "$API/entities/bond/validate" -H 'content-type: application/json' -d "$BOND"; echo
 echo "-- write:"
-curl -fsS -X PUT "$API/entities/bond/documents" -H 'content-type: application/json' -d "$BOND"; echo
+curl -fsS "${AUTH[@]}" -X PUT "$API/entities/bond/documents" -H 'content-type: application/json' -d "$BOND"; echo
 echo "-- read:"
-curl -fsS "$API/entities/bond/documents/US0378331005"; echo
+curl -fsS "${AUTH[@]}" "$API/entities/bond/documents/US0378331005"; echo
 echo "-- query (issuer=APPLE):"
-curl -fsS -X POST "$API/entities/bond/query" -H 'content-type: application/json' \
+curl -fsS "${AUTH[@]}" -X POST "$API/entities/bond/query" -H 'content-type: application/json' \
   -d '{"where":[{"field":"issuer","op":"eq","value":"APPLE"}]}'; echo
 echo "-- lifecycle event (BondIssued -> active, emits to Kafka):"
-curl -fsS -X POST "$API/entities/bond/events" -H 'content-type: application/json' \
+curl -fsS "${AUTH[@]}" -X POST "$API/entities/bond/events" -H 'content-type: application/json' \
   -d '{"event_type":"BondIssued","key":"US0378331005","event_id":"evt-1","payload":'"$(echo "$BOND" | sed 's/^{"document"://;s/}$//')"'}'; echo
 
 say "Done"
+ok "Management UI:  $API/ui/   (login: admin / admin)"
 ok "API:            $API"
 ok "Swagger UI:     $API/docs"
 ok "Readiness:      $API/readyz"

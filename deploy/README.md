@@ -16,8 +16,14 @@ That will:
 3. Run a smoke test: validate → write → read → query → lifecycle event.
 
 Then open:
+- **Management UI:** http://localhost:8080/ui/  (login: **admin / admin**)
 - **Swagger UI:** http://localhost:8080/docs
 - **Readiness:** http://localhost:8080/readyz
+
+The UI lets you browse/edit contracts (validate-before-save), validate documents,
+drive state machines, and browse data. Auth is JWT login (change the default
+creds and `JWT_SECRET` in `docker-compose.yml`); it can integrate with Microsoft
+Entra / Azure AD — see [../docs/deployment.md](../docs/deployment.md#management-ui).
 
 Tear down (removes data volumes):
 

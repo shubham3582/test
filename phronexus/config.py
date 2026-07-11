@@ -186,10 +186,32 @@ class IcebergSettings(BaseModel):
         return props
 
 
+class OidcSettings(BaseModel):
+    # Microsoft Entra / Azure AD (or any OIDC IdP). Wire these to enable SSO.
+    enabled: bool = False
+    issuer: str | None = None          # e.g. https://login.microsoftonline.com/<tenant>/v2.0
+    client_id: str | None = None
+    client_secret: str | None = None
+    redirect_uri: str | None = None
+    scopes: list[str] = Field(default_factory=lambda: ["openid", "profile", "email"])
+    # Map an IdP group/role claim value -> a Phronexus role (e.g. "admin").
+    role_claim: str = "roles"
+
+
 class AuthSettings(BaseModel):
-    # Any subset of: "none", "api_key", "bearer", "mtls". Tried in order; the
-    # first that produces a principal wins. Default is open (dev only).
+    # Any subset of: "none", "api_key", "bearer", "jwt", "mtls". Tried in order;
+    # the first that produces a principal wins. Default is open (dev only).
     schemes: list[str] = Field(default_factory=lambda: ["none"])
+    # --- UI / session login ---
+    # Provider for the login flow: "local" (username/password below) or "oidc".
+    provider: str = "local"
+    jwt_secret: str = "change-me-in-production"
+    jwt_ttl_seconds: int = 28800  # 8h
+    # Fixed local users: username -> {password | password_sha256, roles: [...]}.
+    users: dict[str, dict] = Field(
+        default_factory=lambda: {"admin": {"password": "admin", "roles": ["admin"]}}
+    )
+    oidc: "OidcSettings" = Field(default_factory=lambda: OidcSettings())
     api_key_header: str = "X-API-Key"
     # key -> principal name. In production store hashes, not raw keys.
     api_keys: dict[str, str] = Field(default_factory=dict)

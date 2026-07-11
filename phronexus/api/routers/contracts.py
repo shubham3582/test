@@ -14,10 +14,17 @@ from phronexus.core import Phronexus
 router = APIRouter(tags=["contracts"], dependencies=[Depends(require_admin)])
 
 
+@router.post("/contracts/validate")
+def validate_contract(body: dict[str, Any], px: Phronexus = Depends(get_px)) -> dict:
+    """Dry-run validate a contract (parse + compatibility) without publishing."""
+    return px.validate_contract(body)
+
+
 @router.post("/contracts", response_model=ContractResponse)
-def publish(body: dict[str, Any], activate: bool = True, px: Phronexus = Depends(get_px)):
+def publish(body: dict[str, Any], activate: bool = True, force: bool = False,
+            px: Phronexus = Depends(get_px)):
     contract = parse_contract(body)
-    px.publish_contract(contract, activate=activate)
+    px.publish_contract(contract, activate=activate, force=force)
     return ContractResponse(published=contract.identity(), activated=activate)
 
 

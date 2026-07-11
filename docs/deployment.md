@@ -189,6 +189,48 @@ auth:
   admin_principals: ["svc-admin"]
 ```
 
+## Management UI
+
+A self-contained web console ships with the API at **`/ui`** (redirect from `/`).
+It's a dependency-free SPA served by FastAPI — no build step, no CDN — so it runs
+anywhere the API runs.
+
+Features: browse/edit **contracts** (all six kinds) with **validate-before-save**
+(the Save button unlocks only after a successful dry-run against
+`POST /contracts/validate`; the server re-validates on publish), a **document
+validator** (JSON Schema + DQ), a **state-machine console** (inspect lifecycles,
+submit events, see accept/reject), and a **data browser** (read / query).
+
+### Authentication
+
+Login issues a signed **JWT** (HS256, stdlib — no dependency); the UI sends it as
+a bearer token and the API enforces it when `api.auth.schemes` includes `jwt`.
+
+```yaml
+# config/api.yaml
+auth:
+  schemes: ["jwt"]                 # enforce the session token
+  provider: local                 # local | oidc
+  jwt_secret: "${JWT_SECRET}"      # REQUIRED in prod (rotate this)
+  jwt_ttl_seconds: 28800
+  users:                           # fixed username/password (dev / small teams)
+    admin: {password_sha256: "<sha256>", roles: ["admin"]}
+    ops:   {password: "changeme",         roles: ["viewer"]}
+```
+
+- Store `password_sha256` (not `password`) for anything real, or move to an IdP.
+- Roles gate admin actions: publishing/refreshing contracts requires the `admin`
+  role (or membership in `admin_principals`).
+
+### Microsoft Entra / Azure AD (SSO)
+
+Set `auth.provider: oidc` and fill `auth.oidc` (issuer, client_id/secret,
+redirect_uri, `role_claim`). The seam is `phronexus.api.providers.OidcProvider` —
+implement the authorization-code redirect + JWKS id-token verification against
+your tenant and map the group/role claim to Phronexus roles. Password login is
+intentionally disabled under OIDC (browser flow only). Until then, `local` is the
+default.
+
 ## Observability
 
 ```yaml
