@@ -276,10 +276,21 @@ point at mounted secrets. See [`config/README.md`](config/README.md).
 
 ## Running against real infrastructure
 
+Fastest path — a self-contained local stack (Aerospike + Kafka + Phronexus) with
+a one-command setup + smoke test:
+
 ```bash
-docker compose up -d          # Aerospike, Redpanda, MinIO, OTel collector
+cd deploy && ./setup.sh       # builds, starts, ingests contracts, smoke-tests
+# then open http://localhost:8080/docs
+```
+
+See [`deploy/README.md`](deploy/README.md) for details, the Kafka runner, and
+troubleshooting. For a hand-rolled setup:
+
+```bash
 cp .env.example .env          # set PHRONEXUS_BACKEND=aerospike, KAFKA__ENABLED=true
 pip install -e '.[aerospike,kafka]'
+python -m phronexus.api.server
 ```
 
 TLS/mTLS, auth, and structured JSON logging are configured centrally via

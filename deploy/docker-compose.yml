@@ -1,0 +1,91 @@
+# Self-contained local stack: Aerospike + Kafka (Redpanda) + Phronexus.
+#   cd deploy && ./setup.sh        # build, start, ingest, smoke-test
+#   docker compose down -v         # tear down
+#
+# Apple Silicon: images below are multi-arch. If an image lacks an arm64 build,
+# add `platform: linux/amd64` to that service (Docker Desktop emulates it).
+services:
+  aerospike:
+    image: aerospike/aerospike-server:7.1.0.0     # Community Edition
+    container_name: phx-aerospike
+    ports: ["3000:3000"]
+    volumes:
+      - ./aerospike.conf:/etc/aerospike/aerospike.conf:ro
+    healthcheck:
+      # CE has no auth; a TCP connect to the service port means it's accepting clients.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/3000' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 20s
+
+  redpanda:
+    image: redpandadata/redpanda:v24.1.7          # Kafka-API compatible
+    container_name: phx-redpanda
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --overprovisioned
+      - --node-id=0
+      - --kafka-addr=PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:9092
+    ports: ["9092:9092", "9644:9644"]
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -qE 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 10s
+
+  phronexus-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: phx-api
+    depends_on:
+      aerospike: {condition: service_healthy}
+      redpanda: {condition: service_healthy}
+    ports: ["8080:8080"]
+    environment:
+      PHRONEXUS_BACKEND: aerospike
+      PHRONEXUS_AEROSPIKE__HOSTS: aerospike:3000
+      PHRONEXUS_AEROSPIKE__NAMESPACE: phronexus
+      # Community Edition has no multi-record transactions — use the manifest
+      # pattern without native txns (visibility still all-or-nothing).
+      PHRONEXUS_AEROSPIKE__USE_NATIVE_TXN: "false"
+      PHRONEXUS_KAFKA__ENABLED: "true"
+      PHRONEXUS_KAFKA__BOOTSTRAP_SERVERS: redpanda:9092
+      PHRONEXUS_KAFKA__SECURITY_PROTOCOL: PLAINTEXT
+      # Fast contract-cache refresh so ingested contracts show up quickly.
+      PHRONEXUS_CONTRACTS__REFRESH_SECONDS: "5"
+      PHRONEXUS_OBSERVABILITY__LOG_LEVEL: INFO
+      PHRONEXUS_API__AUTH__SCHEMES: '["none"]'
+      PHRONEXUS_STATEMACHINE__DLQ_TOPIC: kafka://phronexus.dlq
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+      start_period: 15s
+
+  # Optional: the autonomous Kafka state-machine runner.
+  #   docker compose --profile workers up -d
+  phronexus-runner:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: phx-runner
+    profiles: ["workers"]
+    depends_on:
+      phronexus-api: {condition: service_healthy}
+    environment:
+      PHRONEXUS_BACKEND: aerospike
+      PHRONEXUS_AEROSPIKE__HOSTS: aerospike:3000
+      PHRONEXUS_AEROSPIKE__USE_NATIVE_TXN: "false"
+      PHRONEXUS_KAFKA__ENABLED: "true"
+      PHRONEXUS_KAFKA__BOOTSTRAP_SERVERS: redpanda:9092
+      PHRONEXUS_KAFKA__SECURITY_PROTOCOL: PLAINTEXT
+      PHRONEXUS_STATEMACHINE__INPUT_TOPICS: '["trades.events", "bonds.events"]'
+      PHRONEXUS_STATEMACHINE__DLQ_TOPIC: kafka://phronexus.dlq
+    command: ["python", "-m", "phronexus.statemachine.runner"]

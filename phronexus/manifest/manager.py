@@ -157,22 +157,27 @@ class ManifestManager:
         }
         expected_gen = existing.generation if existing else 0
 
+        # Order matters when there is no true transaction (e.g. Aerospike
+        # Community Edition): write everything the manifest will reference FIRST,
+        # then the manifest LAST as the commit point. Under a real multi-record
+        # transaction the order is irrelevant (all-or-nothing); under sequential
+        # writes it guarantees that a visible manifest implies its projections,
+        # index entries, and change-feed event are already durable.
         for r in records:
             self._store.put(r.projection.set, r.key, r.bins, ttl=r.ttl, txn=txn)
-        self._store.put(
-            sc.manifest_set, doc_id, manifest_bins, expected_generation=expected_gen, txn=txn
-        )
-        # Stage the inverted-index update into the SAME transaction so a committed
-        # document can never be missing from search (no crash window).
+        # Inverted-index update — atomic with the manifest (no missed-index window).
         if self._index_in_txn:
             self._stage_reindex(entity, doc_id, old_data, document, txn)
-        # Stage the change-feed event durably (transactional outbox) so retention
-        # can never miss a committed document on a crash.
+        # Durable change-feed event (transactional outbox) — retention can't miss it.
         event = CommitEvent(
             entity=entity, doc_id=doc_id, txn_id=txn_id, contract_version=sc.version,
             op="upsert", ts=ts, document=dict(document),
         )
         self._store.put(self._changefeed_set, f"{doc_id}:{txn_id}", event.to_dict(), txn=txn)
+        # Manifest LAST — the commit point.
+        self._store.put(
+            sc.manifest_set, doc_id, manifest_bins, expected_generation=expected_gen, txn=txn
+        )
         return StagedWrite(
             entity=entity, doc_id=doc_id, txn_id=txn_id, sc=sc,
             records=records, old_data=old_data, existing=existing, ts=ts,
