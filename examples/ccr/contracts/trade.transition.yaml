@@ -1,0 +1,40 @@
+# The CCR saga as config. Each downstream service consumes a request topic,
+# does its work, and replies with an event back onto ccr.trade.events; Phronexus
+# advances the trade one step per reply. State is persisted transactionally with
+# the outbound request, so the pipeline is effectively-once end to end.
+#
+#   TradeReceived  --> request the future-value cube from MFL
+#   CubeReady      --> request risk numbers from the calculator
+#   CalcComplete   --> publish to the display service
+kind: transition
+entity: ccr_trade
+version: 1
+state_field: status
+inputs: ["kafka://ccr.trade.events"]
+transitions:
+  - event: TradeReceived
+    from: null
+    to: cube_requested
+    emit:
+      - {topic: "kafka://mfl.cube.requests", type: RequestValueCube}
+
+  - event: CubeReady
+    from: cube_requested
+    to: calc_requested
+    guard: "as_of > 0"
+    emit:
+      - {topic: "kafka://calc.requests", type: RequestCalc}
+
+  - event: CalcComplete
+    from: calc_requested
+    to: published
+    guard: "exposure >= 0"
+    emit:
+      - {topic: "kafka://ccr.display", type: DisplayUpdate}
+
+  # A cancellation from any state notifies display and stops the saga.
+  - event: TradeCancelled
+    from: "*"
+    to: cancelled
+    emit:
+      - {topic: "kafka://ccr.display", type: DisplayUpdate}

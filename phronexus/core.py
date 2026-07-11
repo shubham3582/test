@@ -192,6 +192,12 @@ class Phronexus:
 
         return build_state_machine(self, output=output, hooks=hooks)
 
+    def scheduler(self, output=None):
+        """Build a distributed scheduler (exactly-once firing) over this instance."""
+        from phronexus.scheduler.engine import Scheduler
+
+        return Scheduler(self, output=output)
+
     # --- lifecycle ------------------------------------------------------
 
     def close(self) -> None:

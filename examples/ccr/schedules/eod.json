@@ -1,0 +1,10 @@
+{
+  "name": "ccr-eod",
+  "topic": "kafka://ccr.eod",
+  "daily_at": "18:30",
+  "timezone": "America/New_York",
+  "payload": {
+    "job": "end-of-day",
+    "steps": ["load_market_data", "reprice_todays_trades", "aggregate_exposure"]
+  }
+}

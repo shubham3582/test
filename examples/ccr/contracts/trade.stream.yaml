@@ -1,0 +1,39 @@
+# JSON Schema for every event the saga emits — validated at produce time, so a
+# malformed request never reaches MFL, the calculator, or the display service.
+kind: stream
+entity: ccr_trade
+version: 1
+mode: enforce
+events:
+  - type: RequestValueCube
+    json_schema:
+      type: object
+      required: [trade_id, counterparty, product_type, maturity_date, status]
+      properties:
+        trade_id: {type: string}
+        counterparty: {type: string}
+        product_type: {type: string}
+        maturity_date: {type: integer}
+        status: {const: cube_requested}
+      additionalProperties: true
+
+  - type: RequestCalc
+    json_schema:
+      type: object
+      required: [trade_id, counterparty, as_of, status]
+      properties:
+        trade_id: {type: string}
+        counterparty: {type: string}
+        as_of: {type: integer}
+        status: {const: calc_requested}
+      additionalProperties: true
+
+  - type: DisplayUpdate
+    json_schema:
+      type: object
+      required: [trade_id, counterparty, status]
+      properties:
+        trade_id: {type: string}
+        counterparty: {type: string}
+        status: {type: string, enum: [published, cancelled]}
+      additionalProperties: true

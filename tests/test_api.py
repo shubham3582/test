@@ -196,3 +196,23 @@ def test_admin_contract_publish_requires_admin():
     # Admin -> 200
     r = client.post("/contracts", json=contract, headers={"X-API-Key": "admin-key"})
     assert r.status_code == 200 and r.json()["published"] == "view:trade:tiny:v1"
+
+
+def test_schedule_crud_and_tick(client):
+    r = client.put("/schedules", json={"name": "s1", "topic": "kafka://t", "interval_seconds": 60})
+    assert r.status_code == 200 and r.json()["upserted"] == "s1"
+    assert client.get("/schedules").json()["schedules"][0]["name"] == "s1"
+    assert client.post("/schedules/tick").json()["fired"] == ["s1"]
+    # State records the single firing.
+    state = client.get("/schedules").json()["schedules"][0]["state"]
+    assert state["count"] == 1
+    assert client.delete("/schedules/s1").json()["deleted"] == "s1"
+    assert client.get("/schedules").json()["schedules"] == []
+
+
+def test_schedule_admin_guarded():
+    client = _make_client(["api_key"], api_keys={"admin-key": "admin", "user-key": "user"},
+                          admin_principals=["admin"])
+    body = {"name": "s1", "topic": "kafka://t", "interval_seconds": 60}
+    assert client.put("/schedules", json=body, headers={"X-API-Key": "user-key"}).status_code == 403
+    assert client.put("/schedules", json=body, headers={"X-API-Key": "admin-key"}).status_code == 200

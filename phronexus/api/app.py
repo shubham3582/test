@@ -15,7 +15,7 @@ from phronexus.api.auth import Authenticator
 from phronexus.api.errors import install_error_handlers
 from phronexus.api.middleware import RequestContextMiddleware
 from phronexus.api.providers import build_provider
-from phronexus.api.routers import auth, contracts, data, events, health
+from phronexus.api.routers import auth, contracts, data, events, health, schedules
 from phronexus.config import Settings
 from phronexus.core import Phronexus
 
@@ -39,6 +39,8 @@ def create_app(px: Optional[Phronexus] = None, settings: Optional[Settings] = No
     from phronexus.statemachine.io import build_output_publisher
 
     app.state.state_machine = px.state_machine(output=build_output_publisher(settings))
+    # Distributed scheduler face: shares the store, publishes triggers via Kafka.
+    app.state.scheduler = px.scheduler(output=build_output_publisher(settings))
 
     app.add_middleware(RequestContextMiddleware)
     install_error_handlers(app)
@@ -48,6 +50,7 @@ def create_app(px: Optional[Phronexus] = None, settings: Optional[Settings] = No
     app.include_router(data.router)
     app.include_router(events.router)
     app.include_router(contracts.router)
+    app.include_router(schedules.router)
 
     # Serve the management UI (self-contained SPA) at /ui.
     ui_dir = Path(__file__).parent / "ui"

@@ -1,0 +1,25 @@
+# UDM trade shape (syntax) + data-quality rules. Runs on every write; the
+# state machine reuses it before persisting the enriched saga document.
+kind: validation
+entity: ccr_trade
+version: 1
+mode: enforce
+json_schema:
+  type: object
+  required: [trade_id, counterparty, book, product_type, notional, currency, trade_date, maturity_date]
+  properties:
+    trade_id: {type: string, minLength: 1}
+    counterparty: {type: string, minLength: 1}
+    book: {type: string, minLength: 1}
+    product_type: {type: string, enum: [IRS, FXFWD, SWAPTION, REPO, CDS]}
+    notional: {type: number}
+    currency: {type: string}
+    trade_date: {type: integer}
+    maturity_date: {type: integer}
+    status: {type: string}
+  additionalProperties: true
+dq_checks:
+  - {name: notional_positive, expr: "notional > 0", severity: error}
+  - {name: ccy_supported, field: currency, in: [USD, EUR, GBP, JPY, CHF], severity: error}
+  - {name: matures_after_trade, expr: "maturity_date > trade_date", severity: error}
+  - {name: trade_id_unique, field: trade_id, unique: true, severity: error}

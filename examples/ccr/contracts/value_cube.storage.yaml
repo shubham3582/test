@@ -1,0 +1,24 @@
+# The future-value cube, landed in Aerospike for hot access. MFL either streams
+# points via Kafka or drops the whole cube via S3 in one go; either way each
+# (trade, scenario, tenor) point is written here and read back with a sorted,
+# clipped query for fast risk lookups.
+kind: storage
+entity: value_cube
+version: 1
+primary_key: [trade_id, scenario_id, tenor]
+manifest_set: value_cube_manifest
+update_policy: upsert
+delete_policy: hard
+projections:
+  - name: main
+    set: value_cube_main
+    key: "{trade_id}:{scenario_id}:{tenor}"
+    fields: ["*"]
+    canonical: true
+    ttl: 0
+  - name: by_trade
+    set: value_cube_by_trade
+    key: "{trade_id}:{tenor}:{scenario_id}"
+    fields: [trade_id, scenario_id, tenor, value, currency, as_of]
+iceberg:
+  enabled: false

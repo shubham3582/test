@@ -1,0 +1,30 @@
+# Counterparty-Credit-Risk trade — the saga's system of record.
+# UDM trade JSON lands here; the state machine advances it through the CCR
+# pipeline (request cube -> request calc -> publish to display).
+kind: storage
+entity: ccr_trade
+version: 1
+primary_key: [trade_id]
+manifest_set: ccr_trade_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: main
+    set: ccr_trade_main
+    key: "{trade_id}"
+    fields: ["*"]
+    canonical: true
+    ttl: 0
+  - name: by_counterparty
+    set: ccr_trade_by_cpty
+    key: "{counterparty}:{trade_id}"
+    fields: [trade_id, counterparty, book, product_type, notional, currency, status]
+  - name: by_book
+    set: ccr_trade_by_book
+    key: "{book}:{trade_id}"
+    fields: [trade_id, book, counterparty, notional, status]
+iceberg:
+  enabled: true
+  table: warehouse.ccr_trades
+  partition_by: [trade_date]
+  retention_days: 3650

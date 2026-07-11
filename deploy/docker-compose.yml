@@ -95,3 +95,23 @@ services:
       PHRONEXUS_STATEMACHINE__INPUT_TOPICS: '["trades.events", "bonds.events"]'
       PHRONEXUS_STATEMACHINE__DLQ_TOPIC: kafka://phronexus.dlq
     command: ["python", "-m", "phronexus.statemachine.runner"]
+
+  # Optional: the distributed scheduler. Run more than one replica for
+  # availability — the Aerospike CAS lease fires each occurrence exactly once.
+  #   docker compose --profile workers up -d --scale phronexus-scheduler=2
+  phronexus-scheduler:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    profiles: ["workers"]
+    depends_on:
+      phronexus-api: {condition: service_healthy}
+    environment:
+      PHRONEXUS_BACKEND: aerospike
+      PHRONEXUS_AEROSPIKE__HOSTS: aerospike:3000
+      PHRONEXUS_AEROSPIKE__USE_NATIVE_TXN: "false"
+      PHRONEXUS_KAFKA__ENABLED: "true"
+      PHRONEXUS_KAFKA__BOOTSTRAP_SERVERS: redpanda:9092
+      PHRONEXUS_KAFKA__SECURITY_PROTOCOL: PLAINTEXT
+      PHRONEXUS_SCHEDULER__POLL_SECONDS: "5"
+    command: ["python", "-m", "phronexus.scheduler.runner"]

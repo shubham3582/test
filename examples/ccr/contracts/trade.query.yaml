@@ -1,0 +1,16 @@
+kind: query
+entity: ccr_trade
+version: 1
+searchable:
+  - {field: counterparty, index: string}
+  - {field: book, index: string}
+  - {field: status, index: string}
+  - {field: notional, index: numeric}
+patterns:
+  - name: by_counterparty
+    where:
+      - {field: counterparty, op: eq, value: "${counterparty}"}
+  - name: pending_by_counterparty
+    where:
+      - {field: counterparty, op: eq, value: "${counterparty}"}
+      - {field: status, op: ne, value: published}

@@ -298,6 +298,13 @@ class ReaperSettings(BaseModel):
     orphan_grace_seconds: int = 300
 
 
+class SchedulerSettings(BaseModel):
+    schedules_set: str = "_schedules"     # schedule definitions
+    state_set: str = "_sched_state"       # per-schedule fire state (CAS lease)
+    outbox_set: str = "_sched_outbox"     # durable trigger outbox
+    poll_seconds: float = 5.0
+
+
 # ---------------------------------------------------------------------------
 # File-based config source (per-subsystem YAML + ${ENV} interpolation)
 # ---------------------------------------------------------------------------
@@ -396,6 +403,7 @@ class Settings(BaseSettings):
     index: IndexSettings = Field(default_factory=IndexSettings)
     changefeed: ChangeFeedSettings = Field(default_factory=ChangeFeedSettings)
     statemachine: StateMachineSettings = Field(default_factory=StateMachineSettings)
+    scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
 
     @classmethod
     def settings_customise_sources(

@@ -1,0 +1,20 @@
+# Hot-path reads: pull a trade's cube, then sort by tenor and clip to the
+# nearest N points. `tenor` is numeric so it supports range + ordered sort.
+kind: query
+entity: value_cube
+version: 1
+searchable:
+  - {field: trade_id, index: string}
+  - {field: scenario_id, index: string}
+  - {field: tenor, index: numeric}
+patterns:
+  - name: by_trade
+    where:
+      - {field: trade_id, op: eq, value: "${trade_id}"}
+    limit: 10000
+  - name: trade_scenario_window
+    where:
+      - {field: trade_id, op: eq, value: "${trade_id}"}
+      - {field: scenario_id, op: eq, value: "${scenario_id}"}
+      - {field: tenor, op: lte, value: "${max_tenor}"}
+    limit: 10000

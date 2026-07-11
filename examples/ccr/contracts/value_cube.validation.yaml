@@ -1,0 +1,18 @@
+kind: validation
+entity: value_cube
+version: 1
+mode: enforce
+json_schema:
+  type: object
+  required: [trade_id, scenario_id, tenor, value, currency, as_of]
+  properties:
+    trade_id: {type: string, minLength: 1}
+    scenario_id: {type: string, minLength: 1}
+    tenor: {type: integer}        # days from as_of
+    value: {type: number}
+    currency: {type: string}
+    as_of: {type: integer}
+  additionalProperties: true
+dq_checks:
+  - {name: tenor_nonneg, expr: "tenor >= 0", severity: error}
+  - {name: ccy_supported, field: currency, in: [USD, EUR, GBP, JPY, CHF], severity: error}
