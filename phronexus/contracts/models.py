@@ -38,6 +38,7 @@ class ContractKind(str, Enum):
     view = "view"
     transition = "transition"
     validation = "validation"
+    stream = "stream"
 
 
 class _Base(BaseModel):
@@ -306,3 +307,40 @@ class ValidationContract(_Base):
 
     def identity(self) -> str:
         return f"validation:{self.entity}:v{self.version}"
+
+
+# --- stream contract (JSON Schema on published events; no external registry) --
+
+class EventSchema(_Base):
+    type: str                          # output event type (matches emit.type)
+    json_schema: dict[str, Any]
+
+    @model_validator(mode="after")
+    def _check(self) -> "EventSchema":
+        from jsonschema import Draft202012Validator
+
+        Draft202012Validator.check_schema(self.json_schema)
+        return self
+
+
+class StreamContract(_Base):
+    """Registers a JSON Schema per outbound event type.
+
+    A registry substitute: events stay JSON on the wire but are validated against
+    their schema at produce time, so malformed events are never published.
+    """
+
+    kind: Literal[ContractKind.stream] = ContractKind.stream
+    entity: str
+    version: int
+    mode: ValidationMode = ValidationMode.enforce
+    events: list[EventSchema]
+
+    def schema_for(self, event_type: str) -> Optional[dict[str, Any]]:
+        for e in self.events:
+            if e.type == event_type:
+                return e.json_schema
+        return None
+
+    def identity(self) -> str:
+        return f"stream:{self.entity}:v{self.version}"

@@ -150,6 +150,36 @@ HTTP POST (TLS/mTLS), `null://` or empty `emit` → consumer-only (no output).
 
 ---
 
+## `stream`
+
+Registers a **JSON Schema per outbound event type** — a schema-registry
+substitute that keeps events as JSON on the wire and validates them at **produce
+time** (before commit), so malformed events are never published.
+
+| Field | Type | Notes |
+|---|---|---|
+| `mode` | `enforce` \| `warn_only` \| `off` | enforce rejects the transition; warn logs but publishes |
+| `events` | `[{type, json_schema}]` | `type` matches the transition's emitted `type` |
+
+```yaml
+kind: stream
+entity: bond
+version: 1
+mode: enforce
+events:
+  - type: BondActivated
+    json_schema:
+      type: object
+      required: [isin, issuer, status]
+      properties: {status: {const: active}}
+```
+
+An emitted event whose payload fails its schema rejects the transition (nothing
+committed, nothing published) under `enforce`; `px.validate_event(entity, type,
+payload)` runs the same check standalone.
+
+---
+
 ## Publishing
 
 ```python

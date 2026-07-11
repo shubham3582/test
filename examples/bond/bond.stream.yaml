@@ -1,0 +1,16 @@
+# Published-event schemas (JSON Schema on the wire; no external registry).
+# Outbound events are validated against these at produce time.
+kind: stream
+entity: bond
+version: 1
+mode: enforce                 # enforce | warn_only | off
+events:
+  - type: BondActivated
+    json_schema:
+      type: object
+      required: [isin, issuer, status]
+      properties:
+        isin: {type: string, minLength: 12}
+        issuer: {type: string}
+        status: {const: active}
+      additionalProperties: true

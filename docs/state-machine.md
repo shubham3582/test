@@ -145,6 +145,12 @@ The transition is durable the moment it commits; the relay publishes
 at-least-once and can run with multiple replicas (rows are removed only after a
 successful publish; consumers dedup on event id).
 
+**Event-schema validation (produce-time).** A `stream` contract registers a JSON
+Schema per emitted event type. Before the commit, each output event's payload is
+validated against its schema; under `enforce` a failure **rejects the transition**
+(nothing committed, nothing published), so malformed events never reach the wire
+— a schema-registry substitute without an external registry.
+
 ## What it reuses vs. adds
 
 **Reuses:** manifest + native transaction (the atomic core), the `_outbox`/change-

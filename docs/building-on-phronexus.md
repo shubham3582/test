@@ -221,6 +221,18 @@ emit:
 
 Failed publishes stay in the outbox for retry (at-least-once).
 
+**Schema on the wire (no external registry).** A `stream` contract registers a
+JSON Schema per emitted event type; outbound events are validated against it at
+produce time, so malformed events are never published:
+
+```yaml
+kind: stream
+entity: bond
+version: 1
+events:
+  - {type: BondActivated, json_schema: {type: object, required: [isin, status]}}
+```
+
 ## Using the REST API & remote SDK
 
 The same core is exposed over HTTP (OpenAPI at `/openapi.json`):

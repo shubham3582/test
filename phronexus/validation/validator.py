@@ -92,6 +92,22 @@ class Validator:
 
         return ValidationReport(ok=not errors, errors=errors, warnings=warnings)
 
+    def validate_event(self, entity: str, event_type: str, payload: dict[str, Any]) -> ValidationReport:
+        """Validate an outbound event payload against its stream JSON Schema."""
+        try:
+            sc = self._registry.active_stream(entity)
+        except ContractNotFound:
+            return ValidationReport(ok=True)
+        if sc.mode == ValidationMode.off:
+            return ValidationReport(ok=True)
+        schema = sc.schema_for(event_type)
+        if schema is None:
+            return ValidationReport(ok=True)
+        errors = [f"event {event_type}: {e}" for e in self._schema_errors(schema, payload)]
+        if sc.mode == ValidationMode.warn_only:
+            return ValidationReport(ok=True, warnings=errors)
+        return ValidationReport(ok=not errors, errors=errors)
+
     # --- internals ------------------------------------------------------
 
     @staticmethod

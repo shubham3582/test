@@ -23,6 +23,7 @@ from phronexus.contracts.loader import Contract, parse_contract
 from phronexus.contracts.models import (
     QueryContract,
     StorageContract,
+    StreamContract,
     TransitionContract,
     ValidationContract,
     ViewContract,
@@ -90,6 +91,9 @@ class ContractRegistry:
 
     def active_validation(self, entity: str) -> ValidationContract:
         return self._active_of("validation", entity)  # type: ignore[return-value]
+
+    def active_stream(self, entity: str) -> StreamContract:
+        return self._active_of("stream", entity)  # type: ignore[return-value]
 
     def get_version(self, identity: str) -> Contract:
         self._maybe_refresh()

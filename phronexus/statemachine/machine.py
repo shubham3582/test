@@ -97,7 +97,9 @@ class StateMachine:
                     reason=f"guard failed: {tr.guard}",
                 )
 
-            # 4) Atomic: new state + outbox events + dedup marker in one txn.
+            # 4) Build output events and validate them against their stream
+            #    JSON Schema at produce time (so malformed events are never
+            #    published). Failures reject the transition — nothing is committed.
             now = time.time()
             outs = [
                 OutputEvent(
@@ -106,6 +108,19 @@ class StateMachine:
                 )
                 for em in tr.emit
             ]
+            ev_errors: list[str] = []
+            for oe in outs:
+                rep = self._px.validator.validate_event(event.entity, oe.type, oe.payload)
+                if rep.warnings:
+                    log.warning("statemachine.event_schema.warnings", warnings=rep.warnings)
+                ev_errors.extend(rep.errors)
+            if ev_errors:
+                self._px.telemetry.incr("phronexus.sm.rejected", entity=event.entity)
+                return ProcessResult(
+                    status="rejected", from_state=cur_state, to_state=tr.to,
+                    reason="validation (event schema): " + "; ".join(ev_errors),
+                )
+
             try:
                 with self._store.transaction() as txn:
                     staged = self._manifest.stage_write(event.entity, new_doc, txn)

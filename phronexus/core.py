@@ -134,6 +134,10 @@ class Phronexus:
         """Run JSON Schema + DQ checks without writing. Returns a ValidationReport."""
         return self.validator.validate(entity, document)
 
+    def validate_event(self, entity: str, event_type: str, payload: dict[str, Any]):
+        """Validate an outbound event payload against its stream JSON Schema."""
+        return self.validator.validate_event(entity, event_type, payload)
+
     def delete(self, entity: str, doc_id: str) -> bool:
         return self.manifest.delete(entity, doc_id)
 

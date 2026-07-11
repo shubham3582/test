@@ -12,6 +12,7 @@ from phronexus.contracts.models import (
     ContractKind,
     QueryContract,
     StorageContract,
+    StreamContract,
     TransitionContract,
     ValidationContract,
     ViewContract,
@@ -24,10 +25,12 @@ _MODEL_BY_KIND = {
     ContractKind.view.value: ViewContract,
     ContractKind.transition.value: TransitionContract,
     ContractKind.validation.value: ValidationContract,
+    ContractKind.stream.value: StreamContract,
 }
 
 Contract = (
-    StorageContract | QueryContract | ViewContract | TransitionContract | ValidationContract
+    StorageContract | QueryContract | ViewContract | TransitionContract
+    | ValidationContract | StreamContract
 )
 
 

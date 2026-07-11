@@ -57,6 +57,7 @@ last**. The manifest is the single commit point:
 | **view** | consumer output: field allow-list, masking, transforms | `contracts_examples/trade.view.*.yaml` |
 | **transition** | state-machine lifecycle: states, guards, emitted events | `contracts_examples/trade.transition.yaml` |
 | **validation** | JSON Schema (syntax) + data-quality checks | `contracts_examples/trade.validation.yaml` |
+| **stream** | JSON Schema on published events (no external registry) | `examples/bond/bond.stream.yaml` |
 
 Contracts are versioned and stored in the `_contracts` set. An in-process cache
 refreshes on a configurable cadence (default **300s**), so publishing a new
