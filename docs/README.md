@@ -14,7 +14,7 @@
 ## Quick links
 
 - **Run the worked example:** `python examples/bond/run_bond.py`
-- **Run the CCR reference:** `python examples/ccr/run_ccr.py`
+- **Run the CCR reference:** `python examples/ccr/run_ccr.py` (in-memory by default; `PHRONEXUS_BACKEND=aerospike` runs it against a live stack)
 - **Contracts for the example:** [`examples/bond/`](../examples/bond), [`examples/ccr/`](../examples/ccr)
 - **Config templates:** [`config/`](../config)
 - **Tests (usage patterns):** [`tests/`](../tests)

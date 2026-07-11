@@ -11,14 +11,15 @@ contracts** that live in the datastore and hot-reload, so new business entities
 - **Retention store:** Apache Iceberg (optional, async, long-term) — an insert-only, idempotent log
 - **Change feed:** Kafka / Redpanda
 - **Interfaces:** Python SDK + REST
-- **Also:** a transactional state machine, a distributed exactly-once scheduler, and binary (msgpack) journals
+- **Also:** a transactional state machine, a distributed exactly-once scheduler, binary (msgpack) journals, and a per-document **trace / debug view** (decoupled audit worker off the change feed)
 
 > **Status:** feature-complete prototype — contracts, write/read via the
 > manifest pattern, config-driven inverted-index search, consumer views, REST
 > API + remote SDK with API-key/bearer/mTLS auth, a transactional state machine,
 > a distributed exactly-once scheduler, insert-only Iceberg retention off the
-> Kafka change feed, binary msgpack journals, and supported native-Aerospike
-> access — plus operational tooling (contract backfill, admin CLI, load
+> Kafka change feed, a decoupled audit worker that builds a per-document
+> trace / debug view off the same feed, binary msgpack journals, and supported
+> native-Aerospike access — plus operational tooling (contract backfill, admin CLI, load
 > harness). Runs today on a built-in in-memory backend (no services required)
 > and on Aerospike. A full **Counterparty-Credit-Risk reference** is built on it
 > in [`examples/ccr/`](examples/ccr).
@@ -37,12 +38,24 @@ Full docs are in [`docs/`](docs/):
 - **[retention-and-journals.md](docs/retention-and-journals.md)** — insert-only, self-reconciling retention log and the binary msgpack journals.
 - **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, native-client options, TLS/mTLS, auth, observability, ops.
 
-Runnable worked examples: `python examples/bond/run_bond.py` · `python examples/ccr/run_ccr.py`.
+Runnable worked examples: `python examples/bond/run_bond.py` · `python examples/ccr/run_ccr.py` ·
+`python examples/otc_trade/run_otc.py` (validation → ETL → dual-shape storage: a
+msgpack blob in `t_doc` + per-element `bins` in `t_base`, with reference-data DQ
+and named inverted indexes `idx_cp`/`idx_ns`) ·
+`python examples/fvcube/run_fvcube.py` (a future-value cube stored **transposed** —
+each date as its own Aerospike bin, via a `spread` projection) ·
+`python examples/fv_paths/run_fv_paths.py` (the same cube **at scale** — 3 parts ×
+~2000 numbers per date: one record per date, each part its own bin, max per date).
+All default to the always-available in-memory
+backend (no services); prefix with `PHRONEXUS_BACKEND=aerospike` to run the same
+code against a live Aerospike + Kafka stack.
 
 **Management UI:** the API serves a self-contained web console at `/ui` — browse/edit
-contracts (validate-before-save), validate documents, drive state machines, and
-browse data, behind JWT login (fixed users now; Microsoft Entra / Azure AD via the
-OIDC provider seam). See [docs/deployment.md](docs/deployment.md#management-ui).
+contracts (validate-before-save), validate documents, drive state machines,
+browse data, and **trace** any document's lifecycle (every commit, delete, and
+state transition — the debug view), behind JWT login (fixed users now; Microsoft
+Entra / Azure AD via the OIDC provider seam). See
+[docs/deployment.md](docs/deployment.md#management-ui).
 
 ## Why manifests
 
@@ -86,6 +99,12 @@ always addressable by primary key.
 
 - Equality / `in` → posting-list lookups and intersections
 - Numeric ranges (`gt`/`gte`/`lt`/`lte`) → per-field ordered term dictionary
+
+Candidates resolved from a posting list are loaded in **one batch read**
+(Aerospike `batch_read`), not a read per id — so pulling all trades for a
+counterparty is two round-trips, not N. `px.find(entity, field, value)` is the
+shortcut (index → PKs → batch); `px.get_many(entity, ids)` batch-reads by id;
+`px.query(...)` uses the same batch path.
 
 ## Quickstart
 
@@ -211,6 +230,32 @@ PHRONEXUS_BACKEND=aerospike PHRONEXUS_KAFKA__ENABLED=true \
 Validate the whole path locally (MinIO + Iceberg REST catalog + worker):
 `cd deploy && docker compose --profile iceberg up -d` then
 `docker compose --profile iceberg run --rm iceberg-validate`.
+
+## Trace / debug view (decoupled audit worker)
+
+"What happened to this document?" — every commit, delete, and derived state
+transition, oldest first. A second **change-feed consumer** (the same decoupled
+pattern as retention) builds a per-document trace; it runs as **its own process**,
+off the hot write path, so it scales and restarts independently and adds zero
+write latency. Correlated by `txn_id`; state transitions are derived from
+committed document versions.
+
+Read it in the console's **Trace** tab, or over REST:
+
+```bash
+GET /entities/{entity}/documents/{doc_id}/trace
+# -> {"events":[{"kind":"commit","version":2,"from":"cube_requested","to":"calc_requested","txn_id":"…"}, …]}
+```
+
+```bash
+# production: its own process next to the app (part of the default deploy stack)
+PHRONEXUS_BACKEND=aerospike PHRONEXUS_KAFKA__ENABLED=true python -m phronexus.audit.main
+```
+
+On the in-memory backend (no Kafka) the consumer runs **inline**, so a trace
+exists with zero services. Disable with `PHRONEXUS_AUDIT__ENABLED=false` (e.g.
+for peak-write benchmarks), or set `PHRONEXUS_AUDIT__TTL_SECONDS` to auto-expire
+old trace records.
 
 ## Ingestion validation (JSON Schema + data quality)
 

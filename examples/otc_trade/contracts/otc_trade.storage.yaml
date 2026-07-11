@@ -1,0 +1,34 @@
+# OTC trade storage: two physical shapes for one logical trade.
+#   t_doc  — the FULL message as a single msgpack binary blob (canonical store;
+#            byte-faithful, compact, cross-language). Reads reconstruct from here.
+#   t_base — a few hot elements, each mapped to its OWN Aerospike bin (not a
+#            single map), so they're natively addressable (secondary indexes,
+#            expressions, partial reads). bin_map renames a couple of them.
+kind: storage
+entity: otc_trade
+version: 1
+primary_key: [trade_id]
+manifest_set: otc_trade_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: doc
+    set: t_doc
+    key: "{trade_id}"          # canonical key may reference PK fields only
+    fields: ["*"]              # the whole document
+    encoding: msgpack          # <-- stored as one binary blob, not a map
+    canonical: true
+  - name: base
+    set: t_base
+    key: "{counterparty_id}:{trade_id}"
+    # Scalars AND nested elements: a map/list value is stored as-is in its bin
+    # (native Aerospike CDT), not flattened or re-serialised.
+    fields: [trade_id, counterparty_id, currency, netting_set_id, notional,
+             notional_usd, trade_date, legs, additional_terms]
+    encoding: bins             # <-- each element becomes its own bin
+    bin_map:                   # bin names differ from JSON names (15-char limit)
+      counterparty_id: cp_id
+      netting_set_id: ns_id
+      additional_terms: add_terms    # JSON name is 16 chars > Aerospike's 15-char cap
+iceberg:
+  enabled: false

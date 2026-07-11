@@ -55,7 +55,15 @@ flowchart TB
     MAN -- CommitEvent --> KAFKA
     SM -- outbox --> KAFKA
     KAFKA -- retention worker<br/>append-only --> ICE
+    KAFKA -- audit worker<br/>per-doc trace --> AERO
+    REST -- trace / debug --> AERO
 ```
+
+Two **change-feed consumers** run decoupled from the hot write path, each in its
+own process (scale/restart freely): the **retention worker** (→ Iceberg) and the
+**audit worker** (→ a per-document trace, powering the console's *Trace* tab and
+`GET …/trace`). With no Kafka (the in-memory dev backend) the audit consumer runs
+inline off the in-process feed, so a trace exists with zero services.
 
 The **six contract kinds** drive every layer:
 
@@ -193,6 +201,7 @@ phronexus/
   statemachine/        transactional state machine (hooks, I/O, node, runner)
   scheduler/           distributed exactly-once scheduler (CAS lease, runner)
   retention/           insert-only Iceberg log: source, warehouse, worker
+  audit/               per-document trace: change-feed consumer (log, worker, main)
   events/              change-feed sinks (memory, kafka)
   codec.py             msgpack pack/unpack (binary envelopes)
   journal.py           message + request/response journals

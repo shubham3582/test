@@ -6,10 +6,15 @@
 <title>Phronexus Console</title>
 <style>
   :root {
-    --bg:#0f1420; --panel:#161d2b; --panel2:#1d2636; --line:#2a3446;
-    --fg:#e6ebf2; --muted:#8b97ab; --accent:#4f8cff; --ok:#2ecc71; --warn:#f1c40f; --err:#ff5c6c;
+    /* Light theme (default). Neutrals carry a faint blue bias toward the accent. */
+    --bg:#f5f8fd; --panel:#ffffff; --panel2:#eef2f9; --line:#d7deea;
+    --fg:#16213c; --muted:#5c6b85; --accent:#2f6fe0; --ok:#12994f; --warn:#b57d0a; --err:#dc2f45;
     --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
     --sans:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0f1420; --panel:#161d2b; --panel2:#1d2636; --line:#2a3446;
+    --fg:#e6ebf2; --muted:#8b97ab; --accent:#4f8cff; --ok:#2ecc71; --warn:#f1c40f; --err:#ff5c6c;
   }
   * { box-sizing:border-box; }
   body { margin:0; font-family:var(--sans); background:var(--bg); color:var(--fg); }
@@ -61,6 +66,43 @@
   .toolbar { display:flex; gap:10px; align-items:center; margin:12px 0; }
   .spacer{ flex:1; }
   .err-text { color:var(--err); }
+  .smhead { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:12px; }
+  .smwrap { display:grid; grid-template-columns:1fr 300px; gap:14px; align-items:start; }
+  @media (max-width:820px){ .smwrap { grid-template-columns:1fr; } }
+  .smgraph { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:8px; overflow:auto; }
+  .smgraph svg text { font-family:var(--mono); }
+  .smnode rect { fill:var(--panel); stroke:var(--line); stroke-width:1.5; }
+  .smnode.init rect { stroke:var(--accent); }
+  .smnode.term rect { stroke:var(--ok); }
+  .smnode text { fill:var(--fg); font-size:12px; }
+  .smedge { cursor:pointer; }
+  .smedge path.wire { fill:none; stroke:var(--muted); stroke-width:1.5; }
+  .smedge path.any { stroke-dasharray:4 3; }
+  .smedge:hover path.wire, .smedge.sel path.wire { stroke:var(--accent); stroke-width:2.5; }
+  .smlabel { cursor:pointer; }
+  .smlabel text { fill:var(--fg); font-size:11px; }
+  .smlabel .elabel { fill:var(--panel); stroke:var(--line); }
+  .smlabel:hover .elabel, .smlabel.sel .elabel { stroke:var(--accent); }
+  .smdetail { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:14px; font-size:12px; }
+  .smdetail h3 { margin:0 0 4px; font-size:13px; }
+  .smdetail .kv { margin:10px 0; }
+  .smdetail .kv .k { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .smdetail .kv .v { font-family:var(--mono); margin-top:2px; word-break:break-word; }
+  .smemit { border-left:2px solid var(--accent); padding:2px 0 2px 8px; margin-top:4px; }
+  .smlist { margin-top:12px; }
+  .smlist .lt { display:flex; gap:10px; padding:6px 8px; border-bottom:1px solid var(--line); cursor:pointer;
+    font-family:var(--mono); font-size:12px; border-radius:6px; }
+  .smlist .lt:hover, .smlist .lt.sel { background:var(--panel2); }
+  .smlist .lt .ev { min-width:130px; color:var(--accent); }
+  .trace { margin-top:14px; }
+  .trow { display:flex; align-items:center; gap:12px; padding:7px 4px; border-bottom:1px solid var(--line);
+    font-family:var(--mono); font-size:12px; }
+  .tdot { width:16px; text-align:center; color:var(--muted); }
+  .tdot.move { color:var(--ok); } .tdot.del { color:var(--err); }
+  .tts { color:var(--muted); width:150px; flex:none; }
+  .tver { width:34px; flex:none; color:var(--muted); }
+  .tdetail { flex:1; }
+  .ttxn { flex:none; }
 </style>
 </head>
 <body>
@@ -87,6 +129,7 @@
     <div class="nav" id="nav"></div>
     <div class="who">
       <div id="whoName"></div>
+      <button id="themeBtn" style="margin-top:8px; width:100%" onclick="toggleTheme()">🌙 Dark</button>
       <button style="margin-top:8px; width:100%" onclick="logout()">Sign out</button>
     </div>
   </div>
@@ -95,7 +138,16 @@
 
 <script>
 const S = { token:null, user:null, roles:[], view:'contracts', contracts:{contracts:[],active:{}}, current:null, saveOk:false };
-const VIEWS = [['contracts','Contracts'],['validate','Document Validator'],['sm','State Machine'],['data','Data Browser']];
+
+// ---- theme (light default; persisted) ----
+function applyTheme(t){
+  document.documentElement.setAttribute('data-theme', t);
+  try{ localStorage.setItem('phx-theme', t); }catch(e){}
+  const b=document.getElementById('themeBtn'); if(b) b.textContent = t==='dark' ? '☀ Light' : '🌙 Dark';
+}
+function toggleTheme(){ applyTheme((document.documentElement.getAttribute('data-theme')==='dark') ? 'light' : 'dark'); }
+(function(){ let t='light'; try{ t=localStorage.getItem('phx-theme')||'light'; }catch(e){} applyTheme(t); })();
+const VIEWS = [['contracts','Contracts'],['validate','Document Validator'],['sm','State Machine'],['data','Data Browser'],['trace','Trace']];
 const KINDS = ['storage','query','view','validation','transition','stream'];
 
 const TEMPLATES = {
@@ -148,7 +200,7 @@ async function showApp() {
   const nav = document.getElementById('nav'); nav.innerHTML='';
   VIEWS.forEach(([id,label])=>{ const b=document.createElement('button'); b.textContent=label;
     b.className = S.view===id?'active':''; b.onclick=()=>{ S.view=id; showApp(); }; nav.appendChild(b); });
-  ({contracts:renderContracts, validate:renderValidate, sm:renderSM, data:renderData}[S.view])();
+  ({contracts:renderContracts, validate:renderValidate, sm:renderSM, data:renderData, trace:renderTrace}[S.view])();
 }
 
 // ---- Contracts ----
@@ -255,9 +307,92 @@ async function loadTransitions(){
   const id=document.getElementById('tc').value; const v=document.getElementById('tcview'); if(!id){ v.innerHTML=''; return; }
   const c=await api('/contracts/'+encodeURIComponent(id));
   document.getElementById('eent').value=c.entity;
-  let rows=(c.transitions||[]).map(t=>`<tr><td>${t.event}</td><td>${t.from===null?'∅':t.from}</td><td>${t.to}</td>
-    <td>${t.guard||''}</td><td>${(t.emit||[]).map(e=>e.topic).join('<br>')}</td></tr>`).join('');
-  v.innerHTML = `<div class="card"><table><tr><th>event</th><th>from</th><th>to</th><th>guard</th><th>emit</th></tr>${rows}</table></div>`;
+  S.tc=c; S.tcSel=null;
+  const inputs=(c.inputs||[]).map(i=>'<span class="pill">in: '+escapeHtml(i)+'</span>').join(' ');
+  v.innerHTML = `<div class="card">
+    <div class="smhead"><b>${escapeHtml(c.entity)}</b> lifecycle
+      <span class="pill">state: ${escapeHtml(c.state_field||'status')}</span> ${inputs}</div>
+    <div class="smwrap">
+      <div id="smgraph" class="smgraph"></div>
+      <div id="smdetail" class="smdetail"><div class="muted">Click a transition — an arrow or a row below — to see its input event, guard, and what it emits.</div></div>
+    </div>
+    <div id="smlist" class="smlist"></div></div>`;
+  drawSM(c);
+  // transitions list (accessible + clickable mirror of the graph edges)
+  document.getElementById('smlist').innerHTML = (c.transitions||[]).map((t,i)=>
+    `<div class="lt" id="lt${i}" onclick="selTrans(${i})"><span class="ev">${escapeHtml(t.event)}</span>`
+    +`<span>${t.from===null?'▶ (start)':(t.from==='*'?'∗ any':escapeHtml(t.from))} → ${escapeHtml(t.to)}</span>`
+    +`<span class="muted">${t.guard?('guard: '+escapeHtml(t.guard)):''}</span></div>`).join('');
+}
+function drawSM(c){
+  const T=c.transitions||[]; const seen={}, states=[];
+  const add=s=>{ if(s!==null&&s!=='*'&&!(s in seen)){ seen[s]=1; states.push(s); } };
+  T.forEach(t=>{ add(t.from); add(t.to); });
+  // Rank each state by longest path from an initial state (concrete edges only).
+  const rank={}; states.forEach(s=>rank[s]=0);
+  for(let it=0; it<states.length+1; it++) T.forEach(t=>{
+    if(t.from===null||t.from==='*') return;
+    if(rank[t.to] < rank[t.from]+1) rank[t.to]=rank[t.from]+1;
+  });
+  const cols={}; states.forEach(s=>(cols[rank[s]]=cols[rank[s]]||[]).push(s));
+  const maxR=Math.max(0,...states.map(s=>rank[s]));
+  const froms=new Set(T.filter(t=>t.from&&t.from!=='*').map(t=>t.from));
+  const inits=new Set(T.filter(t=>t.from===null).map(t=>t.to));
+  const NW=150,NH=42,CG=104,RG=24,PADX=54,PADY=24;
+  let rows=0; for(let r=0;r<=maxR;r++) rows=Math.max(rows,(cols[r]||[]).length);
+  const W=PADX+(maxR+1)*NW+maxR*CG+30, H=PADY*2+rows*NH+(rows-1)*RG;
+  const pos={};
+  for(let r=0;r<=maxR;r++){ const col=cols[r]||[]; const colH=col.length*NH+(col.length-1)*RG;
+    col.forEach((s,i)=>{ pos[s]={x:PADX+r*(NW+CG), y:PADY+(H-PADY*2-colH)/2+i*(NH+RG), w:NW, h:NH}; }); }
+  const edges=[];
+  T.forEach((t,i)=>{
+    const tgt=pos[t.to]; if(!tgt) return;
+    let sx,sy; const tx=tgt.x, ty=tgt.y+tgt.h/2; let cls='';
+    if(t.from===null){ sx=tgt.x-30; sy=ty; cls=''; }        // start marker
+    else if(t.from==='*'){ sx=tgt.x-30; sy=tgt.y-14; cls='any'; }
+    else { const s=pos[t.from]; if(!s) return; sx=s.x+s.w; sy=s.y+s.h/2; }
+    const back=tx<sx; const dx=Math.max(34,Math.abs(tx-sx)/2);
+    const off=(i%2?1:-1)*(6+8*(i%3));
+    const mx=(sx+tx)/2, my=(sy+ty)/2 - 16 - (back?18:0) + (t.from==='*'?0:off*0.4);
+    const d=`M ${sx} ${sy} C ${sx+dx} ${sy+(back?off:0)}, ${tx-dx} ${ty+(back?off:0)}, ${tx} ${ty}`;
+    edges.push({i,t,d,mx,my,cls,start:t.from===null});
+  });
+  const node=s=>{ const p=pos[s]; const cl='smnode'+(inits.has(s)?' init':'')+(!froms.has(s)?' term':'');
+    return `<g class="${cl}"><rect x="${p.x}" y="${p.y}" width="${p.w}" height="${p.h}" rx="9"/>`
+      +`<text x="${p.x+p.w/2}" y="${p.y+p.h/2+4}" text-anchor="middle">${escapeHtml(s)}</text></g>`; };
+  // Wires render behind the nodes; labels render in a separate pass AFTER the
+  // nodes so an event label is never hidden by a state box.
+  const wire=e=>`<g class="smedge" id="ed${e.i}" onclick="selTrans(${e.i})">`
+      +`<path class="wire ${e.cls}" d="${e.d}" marker-end="url(#arw)"/></g>`;
+  const label=e=>{ const lw=Math.max(30,(e.t.event.length)*6.6+10);
+    return `<g class="smlabel" id="el${e.i}" onclick="selTrans(${e.i})">`
+      +`<rect class="elabel" x="${e.mx-lw/2}" y="${e.my-11}" width="${lw}" height="17" rx="5"/>`
+      +`<text x="${e.mx}" y="${e.my+1}" text-anchor="middle">${escapeHtml(e.t.event)}</text></g>`; };
+  // start dots for initial transitions
+  const dots=edges.filter(e=>e.start).map(e=>{ const p=pos[e.t.to];
+    return `<circle cx="${p.x-30}" cy="${p.y+p.h/2}" r="5" fill="var(--accent)"/>`; }).join('');
+  document.getElementById('smgraph').innerHTML =
+    `<svg width="${W}" height="${Math.max(H,80)}" viewBox="0 0 ${W} ${Math.max(H,80)}">`
+    +`<defs><marker id="arw" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto">`
+    +`<path d="M0,0 L7.5,3 L0,6 Z" fill="var(--muted)"/></marker></defs>`
+    +dots + edges.map(wire).join('') + states.map(node).join('') + edges.map(label).join('') + `</svg>`;
+}
+function selTrans(i){
+  const c=S.tc; if(!c) return; const t=c.transitions[i]; S.tcSel=i;
+  document.querySelectorAll('.smedge.sel,.smlabel.sel,.smlist .lt.sel').forEach(el=>el.classList.remove('sel'));
+  const ed=document.getElementById('ed'+i); if(ed) ed.classList.add('sel');
+  const el=document.getElementById('el'+i); if(el) el.classList.add('sel');
+  const lt=document.getElementById('lt'+i); if(lt) lt.classList.add('sel');
+  const emits=(t.emit||[]).map(e=>`<div class="smemit"><b>${escapeHtml(e.type||t.to)}</b><br><span class="muted">${escapeHtml(e.topic)}</span></div>`).join('') || '<span class="muted">— nothing emitted —</span>';
+  const src = t.from===null?'▶ start':(t.from==='*'?'any state':t.from);
+  document.getElementById('smdetail').innerHTML =
+    `<h3>${escapeHtml(t.event)}</h3><div class="muted">arrives on ${(c.inputs||['—']).map(escapeHtml).join(', ')}</div>`
+    +`<div class="kv"><div class="k">transition</div><div class="v">${escapeHtml(String(src))} → ${escapeHtml(t.to)}</div></div>`
+    +`<div class="kv"><div class="k">guard</div><div class="v">${t.guard?escapeHtml(t.guard):'—'}</div></div>`
+    +`<div class="kv"><div class="k">in between (atomic commit)</div><div class="v muted">writes ${escapeHtml(c.state_field||'status')}=<b>${escapeHtml(t.to)}</b> + enqueues the outputs below in one transaction; dedup marker makes redelivery a no-op.</div></div>`
+    +`<div class="kv"><div class="k">emits →</div><div class="v">${emits}</div></div>`;
+  // prefill the event console for a quick try
+  document.getElementById('etype').value=t.event;
 }
 async function submitEvent(){
   const out=document.getElementById('eresult'); let payload;
@@ -296,6 +431,42 @@ async function runQuery(){ const out=document.getElementById('qresult'); let whe
         {method:'POST', body:JSON.stringify({where})});
     out.innerHTML='<div class="result">'+escapeHtml(JSON.stringify(r,null,2))+'</div>'; }
   catch(e){ out.innerHTML=res(false,[e.body?.detail||e.message]); } }
+
+// ---- Trace (debug: what happened to a document) ----
+function renderTrace(){
+  document.getElementById('main').innerHTML = `<h2>Trace</h2>
+    <div class="sub">What happened to one document — every commit, delete and state transition, oldest first. Built off the change feed by the decoupled audit worker.</div>
+    <div class="card" style="max-width:900px">
+      <div class="row"><div><label>Entity</label><input id="tent" placeholder="e.g. bond"/></div>
+        <div><label>Doc id</label><input id="tid" placeholder="e.g. US0378331005"/></div></div>
+      <div class="toolbar"><button class="primary" onclick="loadTrace()">Trace</button></div>
+      <div id="tresult"></div></div>`;
+}
+function fmtTs(ts){ try{ return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19); }catch(e){ return ''+ts; } }
+async function loadTrace(){
+  const out=document.getElementById('tresult');
+  const ent=document.getElementById('tent').value, id=document.getElementById('tid').value;
+  if(!ent||!id){ out.innerHTML=res(false,['Enter an entity and doc id']); return; }
+  try{
+    const r=await api('/entities/'+encodeURIComponent(ent)+'/documents/'+encodeURIComponent(id)+'/trace');
+    const ev=r.events||[];
+    if(!ev.length){ out.innerHTML='<div class="muted" style="margin-top:12px">No trace yet — nothing recorded for '+escapeHtml(ent+'/'+id)+'. (With Kafka, the audit worker lands records a moment after each write.)</div>'; return; }
+    let rows=ev.map(e=>{
+      const isDel=e.kind==='delete';
+      const moved=(e.from!==undefined||e.to!==undefined)&&e.to!==e.from;
+      const dot=isDel?'●':(moved?'◆':'○');
+      const detail = isDel ? 'deleted'
+        : moved ? ('transition  '+String(e.from)+' → '+e.to)
+        : ('commit'+(e.state!==undefined?('  state='+e.state):''));
+      return '<div class="trow"><span class="tdot '+(isDel?'del':(moved?'move':''))+'">'+dot+'</span>'
+        +'<span class="tts">'+fmtTs(e.ts)+'</span>'
+        +'<span class="tver">v'+(e.version||'?')+'</span>'
+        +'<span class="tdetail">'+escapeHtml(detail)+'</span>'
+        +'<span class="ttxn muted">'+escapeHtml((e.txn_id||'').slice(0,8))+'</span></div>';
+    }).join('');
+    out.innerHTML='<div class="trace">'+rows+'</div>';
+  }catch(e){ out.innerHTML=res(false,[e.body?.detail||e.message]); }
+}
 
 // ---- helpers ----
 function res(ok, lines){ const b='<span class="badge '+(ok?'ok':'err')+'">'+(ok?'OK':'FAILED')+'</span>';

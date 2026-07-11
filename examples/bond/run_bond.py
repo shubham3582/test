@@ -1,20 +1,25 @@
 """End-to-end walkthrough of onboarding a new entity ('bond') by config only.
 
-    python examples/bond/run_bond.py
+    python examples/bond/run_bond.py                              # in-memory, no services
+    PHRONEXUS_BACKEND=aerospike python examples/bond/run_bond.py  # same code, live stack
 
-Runs entirely on the in-memory backend — no services required. Every contract
-that shapes the 'bond' entity (storage, query, view, validation, transition)
-lives in examples/bond/*.yaml; there is no bond-specific Python.
+Defaults to the always-available in-memory backend — no services required. Set
+PHRONEXUS_BACKEND=aerospike (with the usual PHRONEXUS_AEROSPIKE__*/KAFKA__* env)
+to run the identical walkthrough against a live stack. Every contract that shapes
+the 'bond' entity (storage, query, view, validation, transition) lives in
+examples/bond/*.yaml; there is no bond-specific Python.
 """
 
 from __future__ import annotations
+
+import os
 
 from phronexus import Phronexus, Settings
 from phronexus.statemachine import InputEvent, MemoryOutputPublisher
 
 
 def main() -> None:
-    settings = Settings(backend="memory")
+    settings = Settings(backend=os.environ.get("PHRONEXUS_BACKEND", "memory"))
     settings.observability.log_level = "ERROR"
     px = Phronexus(settings)
 

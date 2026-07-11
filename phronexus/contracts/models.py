@@ -54,12 +54,39 @@ class IcebergConfig(_Base):
     retention_days: int = 0
 
 
+class BinSpread(_Base):
+    """Transpose a map-valued field into one bin PER ENTRY (data-driven bin names).
+
+    Pivots ``{field: {key: value, ...}}`` into bins ``prefix+key -> value`` — e.g.
+    a future-value cube's ``curve: {"20260712": ..., "20260718": ...}`` becomes
+    bins ``d20260712``, ``d20260718``. The keys aren't known at contract time, so
+    bin-name length (≤15) is checked at write time.
+    """
+
+    field: str          # a map-valued document field to explode
+    prefix: str = ""    # bin name = prefix + str(key)
+
+
 class Projection(_Base):
     name: str
     set: str  # Aerospike set the projection records live in
     key: str  # key template, e.g. "{counterparty}:{trade_id}"
     fields: list[str] = Field(default_factory=lambda: ["*"])  # ["*"] = whole doc
     ttl: int = 0  # seconds; 0 = never expire
+    # How the projected payload is laid out in the record:
+    #   map      — one ``doc`` bin holding an Aerospike map (default)
+    #   msgpack  — one ``doc`` bin holding a compact binary blob (byte-faithful,
+    #              cross-language) — good for a space-efficient whole-document store
+    #   bins     — each selected element becomes its OWN top-level Aerospike bin,
+    #              so it's natively addressable (secondary indexes, expressions,
+    #              partial reads). Use ``bin_map`` to name/shorten bins.
+    encoding: Literal["map", "msgpack", "bins"] = "map"
+    # For ``encoding: bins`` only — rename a document field to an Aerospike bin
+    # (e.g. shorten "counterparty_id" -> "cp"). Fields not listed keep their name.
+    bin_map: dict[str, str] = Field(default_factory=dict)
+    # For ``encoding: bins`` only — transpose a map field into per-entry bins
+    # (data-driven bin names). See :class:`BinSpread`.
+    spread: list[BinSpread] = Field(default_factory=list)
     # Exactly one projection per contract must be canonical: it holds the full
     # document and is what reads reconstruct from.
     canonical: bool = False
@@ -70,6 +97,43 @@ class Projection(_Base):
 
     def key_tokens(self) -> list[str]:
         return _KEY_TOKEN.findall(self.key)
+
+    def bin_for(self, field: str) -> str:
+        """The Aerospike bin name a document field maps to under ``encoding: bins``."""
+        return self.bin_map.get(field, field)
+
+    @model_validator(mode="after")
+    def _validate_encoding(self) -> "Projection":
+        _RESERVED = {"doc", "_doc_id", "_txn", "_cver", "_pjn"}
+        if self.bin_map and self.encoding != "bins":
+            raise ValueError(f"projection {self.name!r}: bin_map requires encoding: bins")
+        if self.spread and self.encoding != "bins":
+            raise ValueError(f"projection {self.name!r}: spread requires encoding: bins")
+        if self.spread and self.canonical:
+            # Reconstruction from data-driven bin names isn't supported; keep the
+            # canonical projection a clean nested doc (map/msgpack).
+            raise ValueError(f"projection {self.name!r}: spread not allowed on the canonical projection")
+        spread_fields = {s.field for s in self.spread}
+        for s in self.spread:
+            if self.fields != ["*"] and s.field not in self.fields:
+                raise ValueError(f"projection {self.name!r}: spread field {s.field!r} must be in fields")
+        if self.encoding == "bins":
+            # Validate the bin names we can know at publish time: every explicit
+            # non-spread field's bin, plus every bin_map target. (Wildcard '*'
+            # fields and spread keys are checked at write time.) Aerospike caps
+            # bin names at 15 bytes.
+            known = set(self.bin_map.values())
+            known |= {self.bin_for(f) for f in self.fields if f != "*" and f not in spread_fields}
+            seen: set[str] = set()
+            for bn in known:
+                if len(bn) > 15:
+                    raise ValueError(f"projection {self.name!r}: bin name {bn!r} exceeds 15 chars")
+                if bn in _RESERVED:
+                    raise ValueError(f"projection {self.name!r}: bin name {bn!r} is reserved")
+                if bn in seen:
+                    raise ValueError(f"projection {self.name!r}: duplicate bin name {bn!r}")
+                seen.add(bn)
+        return self
 
 
 class StorageContract(_Base):
@@ -123,10 +187,18 @@ class StorageContract(_Base):
 class SearchableField(_Base):
     field: str
     index: IndexType = IndexType.string
+    # Optional human label for the inverted index on this field (e.g. "idx_cp").
+    # The index itself is maintained per (entity, field); this names it for
+    # operators/docs and shows up in index-maintenance logs.
+    name: Optional[str] = None
     # Ranges (gt/gte/lt/lte) require numeric ordering; string fields are eq/in.
     @property
     def supports_range(self) -> bool:
         return self.index == IndexType.numeric
+
+    @property
+    def index_name(self) -> str:
+        return self.name or f"idx_{self.field}"
 
 
 class Predicate(_Base):

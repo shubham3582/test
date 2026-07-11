@@ -1,0 +1,16 @@
+# Inverted indexes for scan-free lookups. Each searchable field is maintained
+# as an inverted index; `name` labels it for operators (shown in index logs).
+kind: query
+entity: otc_trade
+version: 1
+searchable:
+  - {field: counterparty_id, index: string, name: idx_cp}   # by counterparty
+  - {field: netting_set_id,  index: string, name: idx_ns}   # by netting set
+  - {field: trade_date,      index: numeric}                # range-capable
+patterns:
+  - name: by_counterparty
+    where:
+      - {field: counterparty_id, op: eq, value: "${cpty}"}
+  - name: by_netting_set
+    where:
+      - {field: netting_set_id, op: eq, value: "${ns}"}

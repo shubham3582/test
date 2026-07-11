@@ -127,6 +127,35 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
             return None
         return Record(bins=bins, generation=meta["gen"], ttl=meta.get("ttl", 0))
 
+    def batch_get(
+        self, set_name: str, keys: list[str], *, txn: Optional[Transaction] = None
+    ) -> dict[str, Record]:
+        """One round-trip for many keys via the native batch API (falls back to
+        per-key gets inside a transaction, which batch reads don't join)."""
+        if txn is not None or not keys:
+            return super().batch_get(set_name, keys, txn=txn)
+        as_keys = [self._key(set_name, k) for k in keys]
+        out: dict[str, Record] = {}
+
+        def _add(rec) -> None:
+            if not rec:
+                return
+            key, meta, bins = rec[0], rec[1], rec[2] if len(rec) > 2 else None
+            if meta is None or bins is None or key[2] is None:
+                return  # not found / no user key
+            out[key[2]] = Record(bins=bins, generation=meta["gen"], ttl=meta.get("ttl", 0))
+
+        if hasattr(self._client, "batch_read"):   # modern client
+            for br in self._client.batch_read(as_keys).batch_records:
+                if getattr(br, "result", 0) == 0:
+                    _add(getattr(br, "record", None))
+        elif hasattr(self._client, "get_many"):    # legacy client
+            for rec in self._client.get_many(as_keys):
+                _add(rec)
+        else:  # no batch API — per-key gets
+            return super().batch_get(set_name, keys, txn=txn)
+        return out
+
     def put(
         self,
         set_name,

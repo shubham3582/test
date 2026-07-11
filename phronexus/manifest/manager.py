@@ -33,7 +33,7 @@ from phronexus.events.base import CommitEvent, EventSink
 from phronexus.kv.base import KVStore
 from phronexus.observability.telemetry import Telemetry
 from phronexus.query.inverted import InvertedIndex
-from phronexus.storage.projection import DOC_BIN, META_TXN, ProjectionEngine
+from phronexus.storage.projection import META_TXN, ProjectionEngine, decode_record
 
 log = structlog.get_logger(__name__)
 
@@ -149,7 +149,7 @@ class ManifestManager:
         if sc.update_policy == UpdatePolicy.insert_only and prev_committed:
             raise DocumentAlreadyExists(f"{entity}/{doc_id} already exists")
 
-        old_data = self._read_canonical_data(existing)
+        old_data = self._read_canonical_data(existing, sc)
         records = self._proj.build(sc, document, doc_id=doc_id, txn_id=txn_id)
         canonical = next(r for r in records if r.projection.canonical)
         ts = time.time()
@@ -240,10 +240,45 @@ class ManifestManager:
                 log.warning("manifest.txn_mismatch", entity=entity, doc_id=doc_id)
                 return None
             self._tel.incr("phronexus.reads", entity=entity)
-            return dict(rec.bins.get(DOC_BIN, {}))
+            return decode_record(sc.canonical_projection, rec.bins)
 
     def exists(self, entity: str, doc_id: str) -> bool:
         return self.read(entity, doc_id) is not None
+
+    def read_many(self, entity: str, doc_ids) -> dict[str, dict[str, Any]]:
+        """Batch-read many documents by id: one batch on the manifest set, then
+        one batch per canonical set — 2 round-trips instead of 2N. Missing,
+        uncommitted, or half-written docs are simply omitted. Pairs with the
+        inverted index (``value -> [doc ids]``) to pull a whole set, e.g. all
+        trades for a counterparty."""
+        ids = list(dict.fromkeys(doc_ids))  # de-dupe, keep order
+        if not ids:
+            return {}
+        with self._tel.span("manifest.read_many", entity=entity):
+            sc = self._registry.active_storage(entity)
+            manifests = self._store.batch_get(sc.manifest_set, ids)
+            by_set: dict[str, list[str]] = {}
+            meta: dict[str, tuple[str, str, Any]] = {}
+            for doc_id, m in manifests.items():
+                if m.bins.get(M_STATUS) != STATUS_COMMITTED:
+                    continue
+                canon = m.bins.get(M_CANONICAL)
+                if not canon:
+                    continue
+                by_set.setdefault(canon["set"], []).append(canon["key"])
+                meta[doc_id] = (canon["set"], canon["key"], m.bins.get(M_TXN))
+            recs: dict[tuple[str, str], Any] = {}
+            for set_name, keys in by_set.items():
+                for k, r in self._store.batch_get(set_name, keys).items():
+                    recs[(set_name, k)] = r
+            out: dict[str, dict[str, Any]] = {}
+            for doc_id, (cset, ckey, txn) in meta.items():
+                rec = recs.get((cset, ckey))
+                if rec is None or rec.bins.get(META_TXN) != txn:
+                    continue  # missing or a non-transactional partial write
+                out[doc_id] = decode_record(sc.canonical_projection, rec.bins)
+            self._tel.incr("phronexus.reads", len(out), entity=entity)
+            return out
 
     # --- delete ---------------------------------------------------------
 
@@ -254,7 +289,7 @@ class ManifestManager:
             if manifest is None or manifest.bins.get(M_STATUS) != STATUS_COMMITTED:
                 raise DocumentNotFound(f"{entity}/{doc_id} not found")
 
-            old_data = self._read_canonical_data(manifest)
+            old_data = self._read_canonical_data(manifest, sc)
             expected_gen = manifest.generation
             del_txn_id = uuid.uuid4().hex
             del_event = CommitEvent(
@@ -311,6 +346,7 @@ class ManifestManager:
             new_v = new_doc.get(sf.field, _MISSING)
             if old_v == new_v:
                 continue
+            log.debug("index.update", entity=entity, index=sf.index_name, field=sf.field, doc_id=doc_id)
             if old_v is not _MISSING:
                 self._index.stage_remove(entity, sf.field, old_v, doc_id, txn=txn)
             if new_v is not _MISSING:
@@ -342,14 +378,14 @@ class ManifestManager:
 
     # --- helpers --------------------------------------------------------
 
-    def _read_canonical_data(self, manifest) -> dict[str, Any]:
+    def _read_canonical_data(self, manifest, sc: StorageContract) -> dict[str, Any]:
         if manifest is None:
             return {}
         canon = manifest.bins.get(M_CANONICAL)
         if not canon:
             return {}
         rec = self._store.get(canon["set"], canon["key"])
-        return dict(rec.bins.get(DOC_BIN, {})) if rec else {}
+        return decode_record(sc.canonical_projection, rec.bins) if rec else {}
 
     def _reap_superseded(self, existing, records, sc: StorageContract) -> None:
         """Remove projection records no longer referenced after an update."""

@@ -1,0 +1,17 @@
+# Counterparty reference data. Seeded once; the trade's DQ `references` check
+# resolves counterparty_id against this entity's manifest (doc id = counterparty_id).
+kind: storage
+entity: counterparty
+version: 1
+primary_key: [counterparty_id]
+manifest_set: cp_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: main
+    set: cp_ref
+    key: "{counterparty_id}"
+    fields: ["*"]
+    canonical: true
+iceberg:
+  enabled: false

@@ -1,0 +1,34 @@
+# Two-stage ingestion validation, both metadata-driven:
+#   1) JSON Schema  — structural / syntax validation of the message shape.
+#   2) DQ checks    — run after syntax; includes reference-data existence checks
+#      that resolve counterparty_id and currency against seeded Aerospike docs.
+kind: validation
+entity: otc_trade
+version: 1
+mode: enforce
+
+json_schema:
+  type: object
+  # netting_set_id is optional on the wire — the ETL step derives it when absent.
+  required: [trade_id, counterparty_id, currency, notional, trade_date]
+  properties:
+    trade_id:        {type: string, minLength: 1}
+    counterparty_id: {type: string, minLength: 2}
+    currency:        {type: string, minLength: 3, maxLength: 3}
+    netting_set_id:  {type: string, minLength: 1}
+    notional:        {type: number}
+    trade_date:      {type: integer}
+    product:         {type: string}
+    book:            {type: string}
+    legs:            {type: array}    # stored as-is in its own bin (a list CDT)
+    additional_terms: {type: object}  # stored as-is in its own bin (a map CDT)
+  additionalProperties: true
+
+dq_checks:
+  - {name: notional_positive, expr: "notional > 0", severity: error}
+  # Reference-data existence (Aerospike): the value must resolve to a seeded doc
+  # in the named reference entity, else the write is rejected.
+  - {name: counterparty_known, field: counterparty_id, references: counterparty, severity: error,
+     message: "counterparty_id is not in the counterparty reference data"}
+  - {name: currency_known, field: currency, references: currency, severity: error,
+     message: "currency is not in the currency reference data"}

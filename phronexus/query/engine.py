@@ -26,6 +26,7 @@ _POSITIVE = {"eq", "in", "gt", "gte", "lt", "lte"}
 
 class DocReader(Protocol):
     def read(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]: ...
+    def read_many(self, entity: str, doc_ids) -> dict[str, dict[str, Any]]: ...
 
 
 class QueryEngine:
@@ -72,9 +73,12 @@ class QueryEngine:
             if not candidates:
                 return []
 
+        # Batch-load all candidates in one shot (2 round-trips) instead of one
+        # read per candidate — the win when a term matches many docs (e.g. all
+        # trades for a counterparty).
+        docs = self._reader.read_many(q.entity, candidates or set())
         results: list[dict[str, Any]] = []
-        for doc_id in candidates or set():
-            doc = self._reader.read(q.entity, doc_id)
+        for doc in docs.values():
             if doc is None:
                 continue  # index was stale / doc since deleted
             if all(self._match(pred, doc) for pred in q.where):

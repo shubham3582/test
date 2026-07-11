@@ -161,17 +161,27 @@ class ContractRegistry:
                 return
             by_identity: dict[str, Contract] = {}
             active: dict[str, str] = {}
+            skipped = 0
             for key, rec in self._store.scan(self._set):
                 if key.startswith("active:"):
                     active[key] = rec.bins["target"]
                 else:
                     doc = dict(rec.bins["doc"])
                     doc["kind"] = rec.bins["kind"]
-                    by_identity[key] = parse_contract(doc)
+                    # Isolate a single bad/forward-incompatible contract: skip it
+                    # with a warning instead of failing the whole refresh (which
+                    # would blank the registry and hide every other contract —
+                    # e.g. an old binary reading a contract written by a newer one).
+                    try:
+                        by_identity[key] = parse_contract(doc)
+                    except Exception:  # noqa: BLE001 - one bad record must not nuke the cache
+                        skipped += 1
+                        log.warning("contract.cache.skip_unparseable", identity=key)
             self._by_identity = by_identity
             self._active = active
             self._last_refresh = time.monotonic()
-        log.debug("contract.cache.refreshed", contracts=len(by_identity), active=len(active))
+        log.debug("contract.cache.refreshed", contracts=len(by_identity),
+                  active=len(active), skipped=skipped)
 
     def list_contracts(self) -> dict:
         """Enumerate contracts persisted in the store (the source of truth).

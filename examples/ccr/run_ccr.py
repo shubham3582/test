@@ -1,8 +1,11 @@
 """Counterparty-Credit-Risk on Phronexus — the whole reference, end to end.
 
-    python examples/ccr/run_ccr.py
+    python examples/ccr/run_ccr.py                      # in-memory (no services)
+    PHRONEXUS_BACKEND=aerospike python examples/ccr/run_ccr.py   # live stack
 
-Runs on the in-memory backend (no services required) and shows:
+Runs on the in-memory backend by default (no services required); set
+PHRONEXUS_BACKEND=aerospike to drive the identical saga against a live
+Aerospike + Kafka deployment. It shows:
 
   1. A UDM trade received and validated, driving the CCR saga:
        TradeReceived -> RequestValueCube (to MFL)
@@ -25,6 +28,7 @@ hot-query shapes are all the config under examples/ccr/.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from phronexus import Phronexus, Settings
@@ -47,7 +51,10 @@ def show_emitted(out: MemoryOutputPublisher, since: int) -> int:
 
 
 def main() -> None:
-    settings = Settings(backend="memory")
+    # Defaults to the in-memory backend (no services required). Set
+    # PHRONEXUS_BACKEND=aerospike (with the usual PHRONEXUS_AEROSPIKE__*/KAFKA__*
+    # env) to run the exact same saga against a live stack.
+    settings = Settings(backend=os.environ.get("PHRONEXUS_BACKEND", "memory"))
     settings.observability.log_level = "ERROR"
     px = Phronexus(settings)
     px.load_contract_dir(str(HERE / "contracts"))

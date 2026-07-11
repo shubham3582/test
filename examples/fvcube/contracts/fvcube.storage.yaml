@@ -1,0 +1,30 @@
+# Future-value cube, stored TRANSPOSED: one record per (trade, scenario) with
+# each future date as its own Aerospike bin.
+#
+#   fvc_doc   — canonical: the clean nested document (curve as a map), msgpack.
+#   fvc_wide  — transposed: `curve` (a {date: value} map) is SPREAD so every date
+#               becomes its own bin (d20260712, d20260718, ...), for native
+#               per-date reads/expressions without unpacking the whole curve.
+kind: storage
+entity: fvcube
+version: 1
+primary_key: [trade_id, scenario_id]
+manifest_set: fvcube_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: doc
+    set: fvc_doc
+    key: "{trade_id}:{scenario_id}"     # canonical key uses PK fields only
+    fields: ["*"]
+    encoding: msgpack
+    canonical: true
+  - name: wide
+    set: fvc_wide
+    key: "{trade_id}:{scenario_id}"
+    fields: [as_of, currency, curve]
+    encoding: bins
+    spread:
+      - {field: curve, prefix: "d"}     # {date: value} -> bins d<YYYYMMDD>
+iceberg:
+  enabled: false

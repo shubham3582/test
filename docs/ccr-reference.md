@@ -5,8 +5,17 @@ A worked, runnable example of building a real risk pipeline on Phronexus with
 Everything here lives under [`examples/ccr/`](../examples/ccr).
 
 ```
-python examples/ccr/run_ccr.py        # end to end, in-memory, no services
+python examples/ccr/run_ccr.py                              # in-memory, no services
+PHRONEXUS_BACKEND=aerospike python examples/ccr/run_ccr.py  # same saga, live stack
 ```
+
+The script defaults to the built-in **in-memory** backend, which is always
+available (pure Python, no services, no optional dependencies) — so the example
+runs anywhere with no setup. Set `PHRONEXUS_BACKEND=aerospike` (with the usual
+`PHRONEXUS_AEROSPIKE__*` / `PHRONEXUS_KAFKA__*` env) to drive the identical saga,
+value cube, and exactly-once scheduler against a live Aerospike + Kafka
+deployment — the saga state and cube then persist across runs, so re-processing
+an already-seen event is a no-op (effectively-once across process restarts).
 
 ## The problem
 

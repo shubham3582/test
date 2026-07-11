@@ -16,6 +16,7 @@ flowchart TB
       RUN[State-machine runner<br/>N per partition set]
       SCH[Scheduler<br/>N replicas · CAS lease]
       RET[Retention worker<br/>append-only → Iceberg]
+      AUD[Audit worker<br/>per-doc trace / debug]
     end
     subgraph data[Data plane]
       AERO[(Aerospike 8.x<br/>Enterprise + SC)]
@@ -49,6 +50,7 @@ flowchart TB
 | Change-feed relay (optional) | `python -m phronexus.changefeed_relay` | replicas (set `changefeed.inline_relay: false`) |
 | Retention worker | `python -m phronexus.retention.main` | consumer group members |
 | Retention compaction | `python -m phronexus.retention.compact` | scheduled job (pairs with the scheduler) |
+| Audit / trace worker | `python -m phronexus.audit.main` | consumer group members |
 | Reaper / backfill | `phronexus reap …` / `phronexus backfill …` | cron / one-shot jobs |
 
 ## Contracts: Aerospike is the source of truth
@@ -372,6 +374,7 @@ otel_endpoint: http://otel-collector:4317
 | **Backfill** a contract change | `phronexus backfill <entity>` | after publishing a new storage/query version |
 | **Reap** orphan projections | `phronexus reap <entity> …` | periodic (crash cleanup) |
 | **Retention** to Iceberg | `python -m phronexus.retention.main` | always-on worker |
+| **Audit / trace** trail | `python -m phronexus.audit.main` | always-on worker (powers the Trace view) |
 | **Publish** a contract | `POST /contracts` or `phronexus publish-contract` | schema evolution |
 
 Backfill is idempotent (writes are keyed by `doc_id` + generation CAS), so it's

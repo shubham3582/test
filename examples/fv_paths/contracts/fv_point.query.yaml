@@ -1,0 +1,16 @@
+# Look points up by trade (all dates for a trade+scenario) or by date range.
+kind: query
+entity: fv_point
+version: 1
+searchable:
+  - {field: trade_id, index: string,  name: idx_trade}
+  - {field: val_date, index: numeric, name: idx_date}   # numeric => range queries
+patterns:
+  - name: by_trade
+    where:
+      - {field: trade_id, op: eq, value: "${t}"}
+  - name: by_date_range
+    where:
+      - {field: trade_id, op: eq, value: "${t}"}
+      - {field: val_date, op: gte, value: "${from}"}
+      - {field: val_date, op: lte, value: "${to}"}

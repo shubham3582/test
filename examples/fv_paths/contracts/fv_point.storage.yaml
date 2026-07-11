@@ -1,0 +1,30 @@
+# Future-value cube at scale: each date carries 3 parts, each ~2000 numbers
+# (e.g. Monte-Carlo paths). One record PER (trade, scenario, date) keeps each
+# record small (~3x2000 doubles ~ 48 KB); each part is its OWN bin so it can be
+# read/updated independently; a per-date `max` bin is stored alongside.
+kind: storage
+entity: fv_point
+version: 1
+primary_key: [trade_id, scenario_id, val_date]   # val_date in the PK => one record per date
+manifest_set: fvp_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: doc
+    set: fvp_doc
+    key: "{trade_id}:{scenario_id}:{val_date}"    # canonical key uses PK fields only
+    fields: ["*"]
+    encoding: msgpack                              # the whole point as one blob
+    canonical: true
+  - name: wide
+    set: fvp_wide
+    key: "{trade_id}:{scenario_id}:{val_date}"
+    fields: [val_date, currency, max_value, part1, part2, part3]
+    encoding: bins                                 # each element its own bin
+    bin_map:                                       # short bin names (15-char cap)
+      max_value: max
+      part1: p1
+      part2: p2
+      part3: p3
+iceberg:
+  enabled: false

@@ -322,6 +322,21 @@ class JournalSettings(BaseModel):
     ttl_seconds: int = 0  # 0 = keep forever; set a horizon to auto-expire records
 
 
+class AuditSettings(BaseModel):
+    """Durable, per-document audit trail powering the trace / debug view.
+
+    Every commit, delete, and state transition appends one immutable record —
+    keyed by (entity, doc_id) and correlated by txn_id — written in the same
+    transaction as the change itself, so the trail can never disagree with the
+    data. Enabled by default (one extra put per commit); disable for peak-write
+    benchmarks, or set a ttl horizon to auto-expire old trace records.
+    """
+
+    enabled: bool = True
+    audit_set: str = "_audit"
+    ttl_seconds: int = 0  # 0 = keep forever; set a horizon to auto-expire records
+
+
 class ReaperSettings(BaseModel):
     enabled: bool = False
     interval_seconds: int = 60
@@ -437,6 +452,7 @@ class Settings(BaseSettings):
     statemachine: StateMachineSettings = Field(default_factory=StateMachineSettings)
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     journal: JournalSettings = Field(default_factory=JournalSettings)
+    audit: AuditSettings = Field(default_factory=AuditSettings)
 
     @classmethod
     def settings_customise_sources(

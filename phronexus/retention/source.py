@@ -60,8 +60,18 @@ class KafkaEventSource(EventSource):  # pragma: no cover - needs a broker
         return out
 
     def commit(self) -> None:
-        """Commit offsets — call only after the batch is flushed to Iceberg."""
-        self._consumer.commit(asynchronous=False)
+        """Commit offsets — call only after the batch is flushed to Iceberg.
+
+        An empty poll cycle stores no offsets, so librdkafka raises
+        ``_NO_OFFSET``; that just means "nothing new to commit" and is benign.
+        """
+        from confluent_kafka import KafkaError, KafkaException
+
+        try:
+            self._consumer.commit(asynchronous=False)
+        except KafkaException as exc:
+            if exc.args[0].code() != KafkaError._NO_OFFSET:
+                raise
 
     def close(self) -> None:
         self._consumer.close()

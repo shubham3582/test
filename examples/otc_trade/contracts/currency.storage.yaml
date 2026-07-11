@@ -1,0 +1,18 @@
+# Currency reference data. Doc id = code (e.g. "USD"); carries the USD FX rate
+# used by the ETL step. The trade's DQ `references: currency` check resolves the
+# trade currency against this entity's manifest.
+kind: storage
+entity: currency
+version: 1
+primary_key: [code]
+manifest_set: ccy_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: main
+    set: ccy_ref
+    key: "{code}"
+    fields: ["*"]
+    canonical: true
+iceberg:
+  enabled: false

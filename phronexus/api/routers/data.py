@@ -48,6 +48,14 @@ def delete(entity: str, doc_id: str, px: Phronexus = Depends(get_px)) -> dict:
     return {"deleted": True, "entity": entity, "doc_id": doc_id}
 
 
+@router.get("/entities/{entity}/documents/{doc_id}/trace")
+def trace(entity: str, doc_id: str, px: Phronexus = Depends(get_px)) -> dict:
+    """Audit trail / debug view: every commit, delete and derived state
+    transition for one document, oldest first. Populated by the audit
+    change-feed consumer (decoupled from the write path)."""
+    return {"entity": entity, "doc_id": doc_id, "events": px.trace(entity, doc_id)}
+
+
 @router.get("/entities/{entity}/views/{view}/documents/{doc_id}")
 def read_view(entity: str, view: str, doc_id: str, px: Phronexus = Depends(get_px)) -> dict:
     doc = px.view(entity, view, doc_id)

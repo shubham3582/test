@@ -32,6 +32,9 @@ TTL, and Iceberg retention.
 | `set` | string | Aerospike set the record lives in |
 | `key` | string | template, e.g. `"{issuer}:{isin}"` (tokens from doc fields) |
 | `fields` | `[string]` | `["*"]` = whole document; else a subset |
+| `encoding` | string | how the payload is laid out: `map` (default — one `doc` map bin), `msgpack` (one `doc` binary blob), or `bins` (each element becomes its own Aerospike bin — natively addressable for secondary indexes / expressions / partial reads). Under `bins`, a nested **map or list** element is stored as-is as a native Aerospike CDT bin. |
+| `bin_map` | `{field: bin}` | `encoding: bins` only — rename/shorten a field's bin (e.g. `counterparty_id → cp_id`). Unlisted fields keep their name. Bin names ≤ 15 chars, no reserved/duplicate names. |
+| `spread` | `[{field, prefix}]` | `encoding: bins` only — **transpose** a map-valued field into one bin per entry (data-driven bin names): `{field: {key: value}}` → bins `prefix+key → value`. E.g. a cube's `curve: {date: value}` → bins `d20260712, …`. Not allowed on the canonical projection; keys' bin-name length is checked at write time. |
 | `ttl` | int | seconds; `0` = never expire |
 | `canonical` | bool | exactly one true; must be `fields:["*"]` and key uses only PK fields |
 
@@ -44,7 +47,7 @@ query patterns.
 
 | Field | Type | Notes |
 |---|---|---|
-| `searchable` | `[{field, index}]` | `index`: `string` (eq/in) or `numeric` (adds range) |
+| `searchable` | `[{field, index, name?}]` | `index`: `string` (eq/in) or `numeric` (adds range). `name`: optional label for the index (e.g. `idx_cp`); the index is a posting list `value → [doc ids]`, maintained per `(entity, field)`. |
 | `patterns` | `[QueryPattern]` | reusable named queries |
 
 **Predicate** (`where` item): `{field, op, value}` where `op` ∈

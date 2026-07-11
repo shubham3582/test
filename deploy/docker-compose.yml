@@ -75,6 +75,29 @@ services:
       retries: 24
       start_period: 15s
 
+  # Audit worker: builds the per-document trace/debug trail off the change feed.
+  # Decoupled from the write path (its own process — scale or restart freely).
+  # Part of the default stack so the console's Trace tab works out of the box;
+  # in Kafka mode the API does NOT audit inline, so this worker owns it.
+  phronexus-audit:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: phx-audit
+    depends_on:
+      phronexus-api: {condition: service_healthy}
+      redpanda: {condition: service_healthy}
+    environment:
+      PHRONEXUS_BACKEND: aerospike
+      PHRONEXUS_AEROSPIKE__HOSTS: aerospike:3000
+      PHRONEXUS_AEROSPIKE__USE_NATIVE_TXN: "false"
+      PHRONEXUS_KAFKA__ENABLED: "true"
+      PHRONEXUS_KAFKA__BOOTSTRAP_SERVERS: redpanda:9092
+      PHRONEXUS_KAFKA__SECURITY_PROTOCOL: PLAINTEXT
+      PHRONEXUS_CONTRACTS__REFRESH_SECONDS: "5"
+      PHRONEXUS_OBSERVABILITY__LOG_LEVEL: INFO
+    command: ["python", "-m", "phronexus.audit.main"]
+
   # Optional: the autonomous Kafka state-machine runner.
   #   docker compose --profile workers up -d
   phronexus-runner:

@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 import structlog
 
+from phronexus.audit import AuditLog, AuditingSink, AuditWorker
 from phronexus.config import Settings
 from phronexus.contracts.loader import Contract, load_dir, load_file, parse_contract
 from phronexus.contracts.registry import ContractRegistry
@@ -37,6 +38,9 @@ class _ManifestReader:
 
     def read(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
         return self._m.read(entity, doc_id)
+
+    def read_many(self, entity: str, doc_ids) -> dict[str, dict[str, Any]]:
+        return self._m.read_many(entity, doc_ids)
 
 
 class _Lookup:
@@ -96,6 +100,14 @@ class Phronexus:
             segment_size=self.settings.index.segment_size,
         )
         self.sink = build_sink(self.settings)
+        # Audit trail behind the trace / debug view. A change-feed consumer
+        # populates it — standalone in production (`python -m phronexus.audit.main`),
+        # off the hot write path. With no Kafka (dev), tee the in-process feed into
+        # an inline consumer so a trace still exists with zero services.
+        acfg = self.settings.audit
+        self.audit = AuditLog(self.store, acfg.audit_set, acfg.ttl_seconds, acfg.enabled)
+        if acfg.enabled and not self.settings.kafka.enabled:
+            self.sink = AuditingSink(self.sink, AuditWorker(self.audit, self.registry))
         self.validator = Validator(self.registry)
         self.manifest = ManifestManager(
             self.store, self.registry, self.index, self.sink, self.telemetry,
@@ -163,6 +175,24 @@ class Phronexus:
 
     def get(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
         return self.manifest.read(entity, doc_id)
+
+    def get_many(self, entity: str, doc_ids) -> dict[str, dict[str, Any]]:
+        """Batch-read documents by id — one batched round-trip per set instead of
+        one read each. Missing/uncommitted ids are omitted from the result."""
+        return self.manifest.read_many(entity, doc_ids)
+
+    def find(self, entity: str, field: str, value: Any) -> list[dict[str, Any]]:
+        """Pull every document whose ``field == value`` via the inverted index
+        (a posting list of primary keys) + a single batch read. E.g. all trades
+        for a counterparty: ``px.find("trade", "counterparty_id", "CP-GS")``."""
+        doc_ids = self.index.lookup_eq(entity, field, value)
+        return list(self.get_many(entity, doc_ids).values())
+
+    def trace(self, entity: str, doc_id: str) -> list[dict[str, Any]]:
+        """Return the audit trail for one document — every commit/delete with its
+        state, oldest first, with transitions derived. Populated by the audit
+        change-feed consumer (see :mod:`phronexus.audit`)."""
+        return self.audit.trace(entity, doc_id)
 
     def validate(self, entity: str, document: dict[str, Any]):
         """Run JSON Schema + DQ checks without writing. Returns a ValidationReport."""
