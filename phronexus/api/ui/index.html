@@ -70,10 +70,14 @@
     <div class="brand">Phron<span>e</span>xus</div>
     <div class="muted" style="margin-top:4px">Management Console</div>
     <div id="ssoNote" class="muted" style="margin-top:14px; display:none"></div>
-    <label>Username</label><input id="u" autocomplete="username" />
-    <label>Password</label><input id="p" type="password" autocomplete="current-password" />
-    <div id="loginErr" class="err-text" style="font-size:12px; margin-top:8px"></div>
-    <button class="primary" style="width:100%; margin-top:16px" onclick="doLogin()">Sign in</button>
+    <button id="ssoBtn" class="primary" style="width:100%; margin-top:16px; display:none"
+      onclick="location.href='/auth/oidc/login'">Sign in with Microsoft</button>
+    <div id="pwform">
+      <label>Username</label><input id="u" autocomplete="username" />
+      <label>Password</label><input id="p" type="password" autocomplete="current-password" />
+      <div id="loginErr" class="err-text" style="font-size:12px; margin-top:8px"></div>
+      <button class="primary" style="width:100%; margin-top:16px" onclick="doLogin()">Sign in</button>
+    </div>
   </div>
 </div>
 
@@ -300,9 +304,20 @@ function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':
 
 // ---- boot ----
 (async function(){
+  // OIDC callback hands us a session token in the URL fragment.
+  if(location.hash.startsWith('#token=')){
+    S.token = decodeURIComponent(location.hash.slice('#token='.length));
+    history.replaceState(null,'','/ui/');
+    try{ const me=await api('/auth/me'); S.user=me.principal; S.roles=me.roles;
+      sessionStorage.setItem('phx', JSON.stringify({token:S.token,user:S.user,roles:S.roles}));
+      showApp(); return; }catch(e){}
+  }
   try { const cfg=await (await fetch('/auth/config')).json();
-    if(cfg.oidc_enabled){ const n=document.getElementById('ssoNote'); n.style.display='block';
-      n.textContent='SSO (Microsoft Entra) is enabled for this deployment.'; } } catch(e){}
+    if(cfg.provider==='oidc' || cfg.oidc_enabled){
+      document.getElementById('pwform').style.display='none';
+      document.getElementById('ssoBtn').style.display='block';
+      const n=document.getElementById('ssoNote'); n.style.display='block';
+      n.textContent='Sign in with your organization account (Microsoft Entra).'; } } catch(e){}
   const saved=sessionStorage.getItem('phx');
   if(saved){ const s=JSON.parse(saved); S.token=s.token; S.user=s.user; S.roles=s.roles;
     try{ await api('/auth/me'); showApp(); return; }catch(e){} }

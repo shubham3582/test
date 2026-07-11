@@ -12,15 +12,29 @@ require_client_cert: true                                                    # e
 
 # --- authentication ---
 auth:
-  # tried in order: none | api_key | bearer | mtls
-  schemes: ["mtls", "bearer"]
+  # tried in order: none | api_key | bearer | jwt | mtls
+  schemes: ["jwt", "mtls"]
   api_key_header: X-API-Key
   mtls_cn_header: X-Client-Cert-CN
   # CN -> principal (empty allows any presented CN)
   mtls_allowed_cns:
     risk.svc.internal: svc-risk
     settlement.svc.internal: svc-settlement
-  # opaque bearer token -> principal (reference secrets via ${ENV})
-  bearer_tokens:
-    "${API_BEARER_TOKEN:-}": svc-admin
-  admin_principals: ["svc-admin"]
+
+  # --- UI / session login ---
+  provider: local                       # local | oidc
+  jwt_secret: "${JWT_SECRET}"           # REQUIRED — rotate this
+  jwt_ttl_seconds: 28800
+  # Fixed users (store password_sha256, not plaintext). Or use OIDC below.
+  users:
+    admin: {password_sha256: "${ADMIN_PW_SHA256}", roles: ["admin"]}
+
+  # --- Microsoft Entra / Azure AD (set provider: oidc to enable) ---
+  oidc:
+    enabled: false
+    issuer: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0"
+    client_id: "${ENTRA_CLIENT_ID}"
+    client_secret: "${ENTRA_CLIENT_SECRET}"
+    redirect_uri: "https://phronexus.example.com/auth/oidc/callback"
+    scopes: ["openid", "profile", "email"]
+    role_claim: "roles"

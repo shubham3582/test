@@ -43,13 +43,12 @@ class LocalPasswordProvider(AuthProvider):
         return None
 
 
-class OidcProvider(AuthProvider):  # pragma: no cover - requires an IdP
-    """Microsoft Entra / Azure AD (OIDC) seam.
+class OidcProvider(AuthProvider):
+    """Microsoft Entra / Azure AD (OIDC) authorization-code + PKCE flow.
 
-    Direct username/password is intentionally not supported (Entra uses the
-    authorization-code flow). Implement ``start_authorization``/``handle_callback``
-    to redirect to the tenant, exchange the code, verify the id_token via JWKS,
-    and map ``role_claim`` -> Phronexus roles.
+    Direct username/password is intentionally unsupported (browser flow only).
+    Discovery, token exchange and JWKS verification use ``pyjwt[crypto]`` +
+    ``httpx`` (the ``[oidc]`` extra), imported lazily so they stay optional.
     """
 
     name = "oidc"
@@ -58,11 +57,81 @@ class OidcProvider(AuthProvider):  # pragma: no cover - requires an IdP
         if not oidc.issuer or not oidc.client_id:
             raise ConfigError("oidc provider requires issuer and client_id")
         self._cfg = oidc
+        self._disc: Optional[dict] = None
+        self._http_client = None
+
+    # --- HTTP (lazy; overridable in tests) ------------------------------
+
+    @property
+    def _http(self):
+        if self._http_client is None:
+            import httpx  # optional dep
+
+            self._http_client = httpx.Client(timeout=10.0)
+        return self._http_client
+
+    def _discovery(self) -> dict:
+        if self._disc is None:
+            url = self._cfg.issuer.rstrip("/") + "/.well-known/openid-configuration"
+            self._disc = self._http.get(url).json()
+        return self._disc
+
+    # --- flow -----------------------------------------------------------
+
+    def authorization_url(self, *, state: str, code_challenge: str, nonce: str) -> str:
+        from urllib.parse import urlencode
+
+        d = self._discovery()
+        q = {
+            "client_id": self._cfg.client_id,
+            "response_type": "code",
+            "redirect_uri": self._cfg.redirect_uri,
+            "scope": " ".join(self._cfg.scopes),
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "response_mode": "query",
+        }
+        return d["authorization_endpoint"] + "?" + urlencode(q)
+
+    def exchange_and_verify(self, code: str, code_verifier: str, *, nonce: Optional[str] = None) -> dict:
+        import json as _json
+
+        import jwt as pyjwt  # PyJWT (optional dep)
+
+        d = self._discovery()
+        data = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": self._cfg.redirect_uri,
+            "client_id": self._cfg.client_id,
+            "code_verifier": code_verifier,
+        }
+        if self._cfg.client_secret:
+            data["client_secret"] = self._cfg.client_secret
+        tok = self._http.post(d["token_endpoint"], data=data).json()
+        id_token = tok["id_token"]
+
+        header = pyjwt.get_unverified_header(id_token)
+        jwks = self._http.get(d["jwks_uri"]).json()
+        jwk = next(k for k in jwks["keys"] if k.get("kid") == header.get("kid"))
+        key = pyjwt.algorithms.RSAAlgorithm.from_jwk(_json.dumps(jwk))
+        claims = pyjwt.decode(
+            id_token, key, algorithms=["RS256"],
+            audience=self._cfg.client_id, issuer=d.get("issuer", self._cfg.issuer),
+        )
+        if nonce is not None and claims.get("nonce") != nonce:
+            raise ConfigError("OIDC nonce mismatch")
+        return claims
+
+    def roles_from_claims(self, claims: dict) -> list[str]:
+        r = claims.get(self._cfg.role_claim, [])
+        return [r] if isinstance(r, str) else list(r)
 
     def authenticate(self, username: str, password: str) -> Optional[list[str]]:
         raise ConfigError(
-            "OIDC/Entra uses the browser authorization-code flow, not password login. "
-            "Implement start_authorization/handle_callback against your tenant."
+            "OIDC/Entra uses the browser authorization-code flow, not password login."
         )
 
 

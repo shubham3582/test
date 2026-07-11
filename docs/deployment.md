@@ -224,12 +224,36 @@ auth:
 
 ### Microsoft Entra / Azure AD (SSO)
 
-Set `auth.provider: oidc` and fill `auth.oidc` (issuer, client_id/secret,
-redirect_uri, `role_claim`). The seam is `phronexus.api.providers.OidcProvider` —
-implement the authorization-code redirect + JWKS id-token verification against
-your tenant and map the group/role claim to Phronexus roles. Password login is
-intentionally disabled under OIDC (browser flow only). Until then, `local` is the
-default.
+Full OIDC **authorization-code + PKCE** flow with JWKS id-token verification
+(`pip install 'phronexus-core[oidc]'`).
+
+```yaml
+# config/api.yaml
+auth:
+  schemes: ["jwt"]
+  provider: oidc
+  jwt_secret: "${JWT_SECRET}"
+  oidc:
+    enabled: true
+    issuer: "https://login.microsoftonline.com/<tenant-id>/v2.0"
+    client_id: "${ENTRA_CLIENT_ID}"
+    client_secret: "${ENTRA_CLIENT_SECRET}"     # omit for a public SPA client (PKCE only)
+    redirect_uri: "https://phronexus.example.com/auth/oidc/callback"
+    scopes: ["openid", "profile", "email"]
+    role_claim: "roles"                          # or "groups"
+```
+
+Flow: the UI shows **"Sign in with Microsoft"** → `GET /auth/oidc/login` (builds
+the PKCE challenge, carries the verifier in a signed `state`, redirects to Entra)
+→ Entra returns to `GET /auth/oidc/callback` → Phronexus exchanges the code,
+**verifies the id_token via the tenant JWKS** (signature, `aud`, `iss`, `exp`,
+`nonce`), maps `role_claim` → Phronexus roles, mints a session JWT, and hands it
+to the SPA in the URL fragment. Password login is disabled under OIDC (browser
+flow only).
+
+**Entra app registration:** add the redirect URI above, and expose **app roles**
+(e.g. `admin`, `viewer`) so they appear in the `roles` claim. `local` remains the
+default provider.
 
 ## Observability
 
