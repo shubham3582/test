@@ -48,11 +48,19 @@ query patterns.
 | `patterns` | `[QueryPattern]` | reusable named queries |
 
 **Predicate** (`where` item): `{field, op, value}` where `op` ∈
-`eq, ne, in, gt, gte, lt, lte`. Ad-hoc queries use the same shape:
+`eq, ne, in, gt, gte, lt, lte`. Queries also support `sort`, `limit`, and
+`offset` (pagination); sort fields must be searchable:
 
 ```json
-{"entity": "bond", "where": [{"field": "coupon", "op": "gte", "value": 4.0}], "limit": 100}
+{"entity": "bond",
+ "where": [{"field": "coupon", "op": "gte", "value": 4.0}],
+ "sort": [{"field": "coupon", "order": "desc"}],
+ "limit": 50, "offset": 0}
 ```
+
+`query_page()` (and `POST /entities/{entity}/query`) return
+`{documents, count, offset, limit, has_more}`; `query()` returns just the page
+list.
 
 **QueryPattern**: `{name, where:[Predicate], limit}` — `value` may use
 `${param}` placeholders bound at call time (`query_pattern(entity, name, **params)`).

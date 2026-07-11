@@ -86,8 +86,9 @@ sequenceDiagram
       M->>S: put projection records (stamped with txn_id)
       M->>I: stage inverted-index add/removes (same txn)
       M->>S: put manifest (CAS on generation) ← commit point
+      M->>S: stage change-feed event (_cf_outbox, same txn)
     end
-    M->>K: emit CommitEvent (change-feed)
+    M->>K: relay change-feed event → sink
     M-->>C: doc_id
 ```
 

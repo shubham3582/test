@@ -183,6 +183,30 @@ class StateMachine:
                 break
         return published
 
+    # --- dead-letter ----------------------------------------------------
+
+    def dead_letter(self, event: InputEvent, result: ProcessResult) -> bool:
+        """Route a rejected/poison event to the DLQ topic (if configured)."""
+        topic = self._cfg.dlq_topic
+        if not topic:
+            return False
+        oe = OutputEvent(
+            topic=topic, type="DeadLetter", key=event.key,
+            payload={
+                "entity": event.entity, "event_type": event.event_type,
+                "event_id": event.event_id, "payload": event.payload,
+                "status": result.status, "reason": result.reason,
+            },
+            ts=time.time(), cause_event_id=event.event_id,
+        )
+        try:
+            self._out.publish(oe)
+        except Exception:  # noqa: BLE001
+            log.warning("statemachine.dlq_publish_failed", event_id=event.event_id)
+            return False
+        self._px.telemetry.incr("phronexus.sm.dead_lettered", entity=event.entity)
+        return True
+
 
 def build_state_machine(px, output: Optional[OutputPublisher] = None,
                         hooks: Optional[list] = None) -> StateMachine:

@@ -18,9 +18,16 @@ class WriteResponse(BaseModel):
     doc_id: str
 
 
+class SortKeyModel(BaseModel):
+    field: str
+    order: str = "asc"
+
+
 class QueryRequest(BaseModel):
     where: list[Predicate] = Field(default_factory=list)
+    sort: list[SortKeyModel] = Field(default_factory=list)
     limit: int = 100
+    offset: int = 0
 
 
 class PatternRequest(BaseModel):
@@ -31,6 +38,9 @@ class DocumentsResponse(BaseModel):
     entity: str
     count: int
     documents: list[dict[str, Any]]
+    offset: int = 0
+    limit: int = 100
+    has_more: bool = False
 
 
 class ErrorResponse(BaseModel):

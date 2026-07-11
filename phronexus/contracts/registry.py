@@ -28,7 +28,7 @@ from phronexus.contracts.models import (
     ValidationContract,
     ViewContract,
 )
-from phronexus.errors import ContractNotFound
+from phronexus.errors import ContractNotFound, ContractValidationError
 from phronexus.kv.base import KVStore
 
 log = structlog.get_logger(__name__)
@@ -61,7 +61,12 @@ class ContractRegistry:
 
     # --- publishing -----------------------------------------------------
 
-    def publish(self, contract: Contract, *, activate: bool = True) -> None:
+    def publish(self, contract: Contract, *, activate: bool = True, force: bool = False) -> None:
+        # Compatibility gate: reject a storage change that would break addressing
+        # of existing documents (PK, manifest set, canonical projection). Pass
+        # force=True to override intentionally.
+        if isinstance(contract, StorageContract) and not force:
+            self._check_storage_compatible(contract)
         identity = contract.identity()
         payload = {"kind": contract.kind.value, "doc": contract.model_dump(mode="json")}
         self._store.put(self._set, identity, payload)
@@ -74,6 +79,28 @@ class ContractRegistry:
             )
         log.info("contract.published", identity=identity, activated=activate)
         self.refresh(force=True)
+
+    def _check_storage_compatible(self, new: StorageContract) -> None:
+        """Reject an evolution that would strand existing documents."""
+        try:
+            prev = self.active_storage(new.entity)
+        except ContractNotFound:
+            return  # first version — nothing to be compatible with
+        problems: list[str] = []
+        if prev.primary_key != new.primary_key:
+            problems.append(f"primary_key {prev.primary_key} -> {new.primary_key}")
+        if prev.manifest_set != new.manifest_set:
+            problems.append(f"manifest_set {prev.manifest_set!r} -> {new.manifest_set!r}")
+        pc, nc = prev.canonical_projection, new.canonical_projection
+        if (pc.set, pc.key) != (nc.set, nc.key):
+            problems.append(
+                f"canonical projection {pc.set}/{pc.key} -> {nc.set}/{nc.key}"
+            )
+        if problems:
+            raise ContractValidationError(
+                f"incompatible storage change for {new.entity!r} (would strand existing "
+                f"documents): {'; '.join(problems)}. Publish with force=True to override."
+            )
 
     # --- lookups (served from cache) ------------------------------------
 

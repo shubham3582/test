@@ -145,6 +145,11 @@ The transition is durable the moment it commits; the relay publishes
 at-least-once and can run with multiple replicas (rows are removed only after a
 successful publish; consumers dedup on event id).
 
+**Dead-letter queue.** Set `statemachine.dlq_topic` and the runner routes
+rejected/poison events there (with their reason) instead of dropping them —
+`applied`/`duplicate` and hook-`dropped` events are not dead-lettered. The runner
+also shuts down gracefully on SIGTERM (drain, then commit offsets).
+
 **Event-schema validation (produce-time).** A `stream` contract registers a JSON
 Schema per emitted event type. Before the commit, each output event's payload is
 validated against its schema; under `enforce` a failure **rejects the transition**

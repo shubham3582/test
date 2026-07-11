@@ -97,6 +97,9 @@ class Phronexus:
         self.manifest = ManifestManager(
             self.store, self.registry, self.index, self.sink, self.telemetry,
             validator=self.validator, index_in_txn=self.settings.index.in_txn,
+            changefeed_set=self.settings.aerospike.changefeed_outbox_set,
+            inline_changefeed=self.settings.changefeed.inline_relay,
+            write_max_retries=self.settings.aerospike.write_max_retries,
         )
         # Wire store lookups now that the manifest/index exist (enables the
         # unique / references DQ checks).
@@ -108,9 +111,11 @@ class Phronexus:
 
     # --- contract admin -------------------------------------------------
 
-    def publish_contract(self, contract: Contract | dict, *, activate: bool = True) -> None:
+    def publish_contract(
+        self, contract: Contract | dict, *, activate: bool = True, force: bool = False
+    ) -> None:
         c = contract if not isinstance(contract, dict) else parse_contract(contract)
-        self.registry.publish(c, activate=activate)
+        self.registry.publish(c, activate=activate, force=force)
 
     def load_contract_file(self, path: str, *, activate: bool = True) -> None:
         self.registry.publish(load_file(path), activate=activate)
@@ -151,6 +156,10 @@ class Phronexus:
 
     def query(self, query: QueryDoc | dict) -> list[dict[str, Any]]:
         return self.query_engine.run(query)
+
+    def query_page(self, query: QueryDoc | dict) -> dict[str, Any]:
+        """Query with paging metadata: {documents, count, offset, limit, has_more}."""
+        return self.query_engine.run_page(query)
 
     def query_pattern(self, entity: str, pattern: str, **params: Any) -> list[dict[str, Any]]:
         return self.query_engine.run_pattern(entity, pattern, params)

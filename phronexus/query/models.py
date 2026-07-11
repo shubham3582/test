@@ -20,12 +20,21 @@ from pydantic import BaseModel, Field
 from phronexus.contracts.models import Predicate
 
 
+class SortKey(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    field: str
+    order: str = "asc"   # asc | desc
+
+
 class QueryDoc(BaseModel):
     model_config = {"extra": "forbid"}
 
     entity: str
     where: list[Predicate] = Field(default_factory=list)
+    sort: list[SortKey] = Field(default_factory=list)
     limit: int = 100
+    offset: int = 0
 
 
 def bind_pattern(where: list[Predicate], params: dict[str, Any]) -> list[Predicate]:

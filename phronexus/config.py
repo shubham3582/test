@@ -43,6 +43,9 @@ class AerospikeSettings(BaseModel):
     contracts_set: str = "_contracts"
     index_set: str = "_inv"
     outbox_set: str = "_outbox"
+    changefeed_outbox_set: str = "_cf_outbox"   # durable change-feed events
+    # Retry a write this many times on an optimistic-concurrency (CAS) conflict.
+    write_max_retries: int = 3
     # --- security: TLS / mTLS + auth ---
     tls_enable: bool = False
     tls_cafile: str | None = None       # CA bundle to verify the cluster
@@ -228,6 +231,14 @@ class ContractSettings(BaseModel):
     background_refresh: bool = False
 
 
+class ChangeFeedSettings(BaseModel):
+    # Emit change-feed events durably: staged into the write transaction and
+    # relayed out. Inline relay drains after commit; set false for a standalone
+    # relay (python -m phronexus.changefeed_relay).
+    inline_relay: bool = True
+    relay_poll_seconds: float = 1.0
+
+
 class IndexSettings(BaseModel):
     # Update the inverted index inside the write transaction (atomic with the
     # manifest) so a crash can never leave a committed document unindexed.
@@ -255,6 +266,8 @@ class StateMachineSettings(BaseModel):
     http_tls_certfile: str | None = None    # client cert -> mTLS
     http_tls_keyfile: str | None = None
     http_headers: dict[str, str] = Field(default_factory=dict)
+    # Topic that rejected/poison events are dead-lettered to (None disables).
+    dlq_topic: str | None = None
 
 
 class ReaperSettings(BaseModel):
@@ -359,6 +372,7 @@ class Settings(BaseSettings):
     contracts: ContractSettings = Field(default_factory=ContractSettings)
     reaper: ReaperSettings = Field(default_factory=ReaperSettings)
     index: IndexSettings = Field(default_factory=IndexSettings)
+    changefeed: ChangeFeedSettings = Field(default_factory=ChangeFeedSettings)
     statemachine: StateMachineSettings = Field(default_factory=StateMachineSettings)
 
     @classmethod

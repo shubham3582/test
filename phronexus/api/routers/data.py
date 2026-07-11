@@ -63,9 +63,18 @@ def query(
     view: str | None = None,
     px: Phronexus = Depends(get_px),
 ) -> DocumentsResponse:
-    q = QueryDoc(entity=entity, where=body.where, limit=body.limit)
-    docs = px.query_view(entity, view, q) if view else px.query(q)
-    return DocumentsResponse(entity=entity, count=len(docs), documents=docs)
+    q = QueryDoc(
+        entity=entity, where=body.where, limit=body.limit, offset=body.offset,
+        sort=[{"field": s.field, "order": s.order} for s in body.sort],
+    )
+    page = px.query_page(q)
+    docs = page["documents"]
+    if view:
+        docs = px.view_engine.apply_many(entity, view, docs)
+    return DocumentsResponse(
+        entity=entity, count=len(docs), documents=docs,
+        offset=page["offset"], limit=page["limit"], has_more=page["has_more"],
+    )
 
 
 @router.post("/entities/{entity}/patterns/{pattern}", response_model=DocumentsResponse)

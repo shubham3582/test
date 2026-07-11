@@ -23,7 +23,12 @@ import structlog
 
 from phronexus.contracts.models import DeletePolicy, StorageContract, UpdatePolicy
 from phronexus.contracts.registry import ContractRegistry
-from phronexus.errors import ContractNotFound, DocumentAlreadyExists, DocumentNotFound
+from phronexus.errors import (
+    ContractNotFound,
+    DocumentAlreadyExists,
+    DocumentNotFound,
+    GenerationConflict,
+)
 from phronexus.events.base import CommitEvent, EventSink
 from phronexus.kv.base import KVStore
 from phronexus.observability.telemetry import Telemetry
@@ -72,6 +77,9 @@ class ManifestManager:
         telemetry: Telemetry,
         validator=None,
         index_in_txn: bool = True,
+        changefeed_set: str = "_cf_outbox",
+        inline_changefeed: bool = True,
+        write_max_retries: int = 3,
     ):
         self._store = store
         self._registry = registry
@@ -80,6 +88,9 @@ class ManifestManager:
         self._tel = telemetry
         self._validator = validator
         self._index_in_txn = index_in_txn
+        self._changefeed_set = changefeed_set
+        self._inline_changefeed = inline_changefeed
+        self._write_max_retries = write_max_retries
         self._proj = ProjectionEngine()
 
     # --- write ----------------------------------------------------------
@@ -89,9 +100,18 @@ class ManifestManager:
             "phronexus.write.latency", entity=entity
         ):
             # Stage the projections + manifest into one transaction, commit, then
-            # run post-commit side effects (index, reap, change-feed emit).
-            with self._store.transaction() as txn:
-                staged = self.stage_write(entity, document, txn)
+            # run post-commit side effects (index, reap, change-feed relay).
+            # Retry on optimistic-concurrency conflicts (competing writers /
+            # hot-term index contention) — stage_write re-reads current state.
+            for attempt in range(self._write_max_retries + 1):
+                try:
+                    with self._store.transaction() as txn:
+                        staged = self.stage_write(entity, document, txn)
+                    break
+                except GenerationConflict:
+                    self._tel.incr("phronexus.write.conflicts", entity=entity)
+                    if attempt >= self._write_max_retries:
+                        raise
             self.post_write(staged, document)
             return staged.doc_id
 
@@ -146,6 +166,13 @@ class ManifestManager:
         # document can never be missing from search (no crash window).
         if self._index_in_txn:
             self._stage_reindex(entity, doc_id, old_data, document, txn)
+        # Stage the change-feed event durably (transactional outbox) so retention
+        # can never miss a committed document on a crash.
+        event = CommitEvent(
+            entity=entity, doc_id=doc_id, txn_id=txn_id, contract_version=sc.version,
+            op="upsert", ts=ts, document=dict(document),
+        )
+        self._store.put(self._changefeed_set, f"{doc_id}:{txn_id}", event.to_dict(), txn=txn)
         return StagedWrite(
             entity=entity, doc_id=doc_id, txn_id=txn_id, sc=sc,
             records=records, old_data=old_data, existing=existing, ts=ts,
@@ -157,14 +184,25 @@ class ManifestManager:
         if not self._index_in_txn:
             self._reindex(staged.entity, staged.doc_id, staged.old_data, document)
         self._reap_superseded(staged.existing, staged.records, staged.sc)
-        self._sink.emit(
-            CommitEvent(
-                entity=staged.entity, doc_id=staged.doc_id, txn_id=staged.txn_id,
-                contract_version=staged.sc.version, op="upsert",
-                ts=staged.ts, document=dict(document),
-            )
-        )
+        # The change-feed event is already durably staged; relay it to the sink.
+        if self._inline_changefeed:
+            self.drain_changefeed()
         log.info("document.committed", entity=staged.entity, doc_id=staged.doc_id, txn=staged.txn_id)
+
+    def drain_changefeed(self, max_events: int = 1000) -> int:
+        """Relay durably-staged change-feed events to the sink. Idempotent-safe."""
+        published = 0
+        for key, rec in list(self._store.scan(self._changefeed_set)):
+            try:
+                self._sink.emit(CommitEvent(**rec.bins))
+            except Exception:  # noqa: BLE001 - leave for retry
+                log.warning("changefeed.emit_failed", key=key)
+                continue
+            self._store.remove(self._changefeed_set, key)
+            published += 1
+            if published >= max_events:
+                break
+        return published
 
     # --- read -----------------------------------------------------------
 
@@ -201,6 +239,11 @@ class ManifestManager:
 
             old_data = self._read_canonical_data(manifest)
             expected_gen = manifest.generation
+            del_txn_id = uuid.uuid4().hex
+            del_event = CommitEvent(
+                entity=entity, doc_id=doc_id, txn_id=del_txn_id,
+                contract_version=sc.version, op="delete", ts=time.time(), document=None,
+            )
 
             if sc.delete_policy == DeletePolicy.soft:
                 new_bins = dict(manifest.bins)
@@ -213,6 +256,8 @@ class ManifestManager:
                     )
                     if self._index_in_txn:
                         self._stage_deindex(entity, doc_id, old_data, txn)
+                    self._store.put(self._changefeed_set, f"{doc_id}:{del_txn_id}",
+                                    del_event.to_dict(), txn=txn)
             else:  # hard delete: remove projections then manifest
                 with self._store.transaction() as txn:
                     for p in manifest.bins.get(M_PROJECTIONS, []):
@@ -222,16 +267,14 @@ class ManifestManager:
                     )
                     if self._index_in_txn:
                         self._stage_deindex(entity, doc_id, old_data, txn)
+                    self._store.put(self._changefeed_set, f"{doc_id}:{del_txn_id}",
+                                    del_event.to_dict(), txn=txn)
 
             if not self._index_in_txn:
                 self._deindex(entity, doc_id, old_data)
             self._tel.incr("phronexus.deletes", entity=entity)
-            self._sink.emit(
-                CommitEvent(
-                    entity=entity, doc_id=doc_id, txn_id=uuid.uuid4().hex,
-                    contract_version=sc.version, op="delete", ts=time.time(), document=None,
-                )
-            )
+            if self._inline_changefeed:
+                self.drain_changefeed()
             log.info("document.deleted", entity=entity, doc_id=doc_id, policy=sc.delete_policy.value)
             return True
 

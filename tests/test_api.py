@@ -32,7 +32,20 @@ TRADE = {
 
 def test_health_and_ready(client):
     assert client.get("/healthz").json()["status"] == "ok"
-    assert client.get("/readyz").json()["status"] == "ready"
+    r = client.get("/readyz")
+    assert r.status_code == 200 and r.json()["status"] == "ready" and r.json()["store"] == "ok"
+
+
+def test_query_pagination_endpoint(client):
+    for i, n in enumerate([300.0, 100.0, 200.0]):
+        client.put("/entities/trade/documents", json={"document": {
+            "trade_id": f"T{i}", "counterparty": "GS", "notional": n, "ccy": "USD", "trade_date": 20250101 + i}})
+    r = client.post("/entities/trade/query", json={
+        "where": [{"field": "counterparty", "op": "eq", "value": "GS"}],
+        "sort": [{"field": "notional", "order": "asc"}], "limit": 2, "offset": 0})
+    body = r.json()
+    assert body["count"] == 2 and body["has_more"] is True
+    assert [d["notional"] for d in body["documents"]] == [100.0, 200.0]
 
 
 def test_write_read_roundtrip(client):

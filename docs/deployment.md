@@ -41,7 +41,8 @@ flowchart TB
 |---|---|---|
 | REST API | `python -m phronexus.api.server` | replicas behind the LB |
 | State-machine runner | `python -m phronexus.statemachine.runner` | Kafka partitions (key = doc_id) |
-| Outbox relay (optional) | `python -m phronexus.statemachine.relay` | replicas (set `inline_relay: false`) |
+| Outbox relay (optional) | `python -m phronexus.statemachine.relay` | replicas (set `statemachine.inline_relay: false`) |
+| Change-feed relay (optional) | `python -m phronexus.changefeed_relay` | replicas (set `changefeed.inline_relay: false`) |
 | Retention worker | `python -m phronexus.retention.main` | consumer group members |
 | Reaper / backfill | `phronexus reap …` / `phronexus backfill …` | cron / one-shot jobs |
 
@@ -223,6 +224,26 @@ safe to re-run.
 write path — so a slow broker/webhook never adds latency to the sync `/events`
 endpoint or the runner. The transition is durable on commit; the relay publishes
 at-least-once and scales with replicas.
+
+## Durability & failure handling
+
+- **Change-feed is transactional.** Every committed document's change-feed event
+  is staged into the *same* write transaction (`_cf_outbox`) and relayed to
+  Kafka — so retention can never miss a committed document on a crash. Inline by
+  default; set `changefeed.inline_relay: false` + run the change-feed relay to
+  decouple it from the write path.
+- **Dead-letter queue.** Set `statemachine.dlq_topic` (e.g. `kafka://phronexus.dlq`)
+  and the runner routes rejected/poison events there with their reason instead of
+  dropping them. `applied`/`duplicate` don't dead-letter; `dropped` (a hook chose
+  to skip) doesn't either.
+- **Write retries.** Writes retry on optimistic-concurrency conflicts
+  (`aerospike.write_max_retries`, default 3) — covers competing writers and
+  hot-term index contention.
+- **Graceful shutdown.** The runner and relays handle SIGTERM/SIGINT: they stop
+  the loop, drain pending outputs, and close the consumer (committing Kafka
+  offsets) before exiting.
+- **Readiness** (`/readyz`) verifies actual backend connectivity (a store read),
+  not just process liveness — returns `503` if the store is unreachable.
 
 ## Scaling & ordering
 

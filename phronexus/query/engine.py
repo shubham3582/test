@@ -35,9 +35,29 @@ class QueryEngine:
         self._reader = reader
 
     def run(self, query: QueryDoc | dict) -> list[dict[str, Any]]:
+        """Return the page of documents (documents only)."""
+        return self.run_page(query)["documents"]
+
+    def run_page(self, query: QueryDoc | dict) -> dict[str, Any]:
+        """Return a page plus paging metadata: documents, count, offset, has_more."""
         q = query if isinstance(query, QueryDoc) else QueryDoc.model_validate(query)
+        matches = self._collect(q)
+        matches = self._sorted(matches, q)
+        page = matches[q.offset:q.offset + q.limit]
+        return {
+            "documents": page,
+            "count": len(page),
+            "offset": q.offset,
+            "limit": q.limit,
+            "has_more": len(matches) > q.offset + q.limit,
+        }
+
+    def _collect(self, q: QueryDoc) -> list[dict[str, Any]]:
         qc = self._registry.active_query(q.entity)
         self._validate(qc, q.where)
+        for s in q.sort:  # sort fields must be searchable (present + declared)
+            if s.field not in qc.field_index():
+                raise QueryError(f"cannot sort on non-searchable field {s.field!r}")
 
         positive = [p for p in q.where if p.op in _POSITIVE]
         if not positive:
@@ -59,9 +79,20 @@ class QueryEngine:
                 continue  # index was stale / doc since deleted
             if all(self._match(pred, doc) for pred in q.where):
                 results.append(doc)
-                if len(results) >= q.limit:
-                    break
         return results
+
+    @staticmethod
+    def _sorted(docs: list[dict[str, Any]], q: QueryDoc) -> list[dict[str, Any]]:
+        if not q.sort:
+            return docs
+        out = list(docs)
+        # Stable multi-key sort: apply keys right-to-left.
+        for key in reversed(q.sort):
+            out.sort(
+                key=lambda d, f=key.field: (d.get(f) is None, d.get(f)),
+                reverse=(key.order == "desc"),
+            )
+        return out
 
     def run_pattern(self, entity: str, pattern: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         qc = self._registry.active_query(entity)
