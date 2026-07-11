@@ -55,6 +55,11 @@ class Validator:
     def __init__(self, registry: ContractRegistry, lookup: Optional[LookupProvider] = None):
         self._registry = registry
         self._lookup = lookup
+        # Compiled-schema cache: building a Draft202012Validator recompiles the
+        # schema (ref resolution + validation tree), so we do it once per schema
+        # object. Keyed by id() with a strong ref to the schema so ids can't be
+        # recycled; a contract refresh yields a new object -> one recompile.
+        self._vcache: dict[int, tuple[dict, Any]] = {}
 
     def set_lookup(self, lookup: LookupProvider) -> None:
         """Wire the store lookup (done after the manifest/index exist)."""
@@ -110,11 +115,19 @@ class Validator:
 
     # --- internals ------------------------------------------------------
 
-    @staticmethod
-    def _schema_errors(schema: dict[str, Any], document: dict[str, Any]) -> list[str]:
+    def _compiled(self, schema: dict[str, Any]):
+        key = id(schema)
+        hit = self._vcache.get(key)
+        if hit is not None and hit[0] is schema:
+            return hit[1]
         from jsonschema import Draft202012Validator
 
         validator = Draft202012Validator(schema)
+        self._vcache[key] = (schema, validator)
+        return validator
+
+    def _schema_errors(self, schema: dict[str, Any], document: dict[str, Any]) -> list[str]:
+        validator = self._compiled(schema)
         out: list[str] = []
         for err in sorted(validator.iter_errors(document), key=lambda e: list(e.path)):
             loc = "/".join(str(p) for p in err.path) or "<root>"

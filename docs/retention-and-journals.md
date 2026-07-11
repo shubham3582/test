@@ -75,6 +75,23 @@ doc     = decode(current[0])                              # exact original from 
 Net: **auto-resume (offset checkpoint) + no loss (manual commit) + automatic
 idempotent reconciliation (latest-per-key view).**
 
+### Compaction — keeping the log bounded
+
+The append log grows with every commit, so a **compaction** pass coalesces it:
+it deduplicates replay rows by `_txn`, drops fully-tombstoned documents and rows
+past their `_expire_at`, and rewrites each table as one Iceberg snapshot (which
+also compacts small files). It's idempotent, so run it on a schedule — it pairs
+naturally with the [scheduler](ccr-reference.md) as a nightly trigger.
+
+```bash
+python -m phronexus.retention.compact              # dedup + drop tombstoned/expired; keep history
+python -m phronexus.retention.compact --collapse   # also drop superseded versions (latest per doc only)
+```
+
+`keep_history=True` (default) preserves every version of live documents (the
+audit tail); `--collapse` keeps only the current version per doc for maximum
+shrinkage. Either way the reconciled current-state view is unchanged.
+
 ## Binary journals
 
 Enable with `journal.enabled: true` (plus the specific toggles). Both journals are

@@ -91,7 +91,10 @@ class Phronexus:
             refresh_seconds=self.settings.contracts.refresh_seconds,
             background_refresh=self.settings.contracts.background_refresh,
         )
-        self.index = InvertedIndex(self.store, index_set=self.settings.aerospike.index_set)
+        self.index = InvertedIndex(
+            self.store, index_set=self.settings.aerospike.index_set,
+            segment_size=self.settings.index.segment_size,
+        )
         self.sink = build_sink(self.settings)
         self.validator = Validator(self.registry)
         self.manifest = ManifestManager(
@@ -152,6 +155,11 @@ class Phronexus:
 
     def put(self, entity: str, document: dict[str, Any]) -> str:
         return self.manifest.write(entity, document)
+
+    def put_many(self, entity: str, documents: list[dict[str, Any]]) -> list[str]:
+        """Bulk-ingest documents. Each is a durable manifest commit (own CAS);
+        the change-feed is relayed once at the end, not per document."""
+        return self.manifest.write_many(entity, documents)
 
     def get(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
         return self.manifest.read(entity, doc_id)

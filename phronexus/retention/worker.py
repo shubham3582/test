@@ -61,6 +61,16 @@ class RetentionWorker:
             removed += self._warehouse.expire(sc.iceberg.table, now)
         return removed
 
+    def compact_all(self, *, now: float = 0.0, keep_history: bool = True) -> list[dict]:
+        """Compact every enabled table: dedup replay rows, drop tombstoned docs
+        and expired rows (and old versions if ``keep_history=False``). Idempotent —
+        safe to run on a schedule."""
+        stats = []
+        for sc in self._enabled_contracts():
+            stats.append(self._warehouse.compact(
+                sc.iceberg.table, now=now, keep_history=keep_history))
+        return stats
+
     # --- internals ------------------------------------------------------
 
     def _storage_for(self, ev: CommitEvent):

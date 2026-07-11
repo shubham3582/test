@@ -61,6 +61,43 @@ class Warehouse(abc.ABC):
         """Reconciled current state — latest row per doc id, tombstones removed."""
         return reconcile(self.scan(table))
 
+    @abc.abstractmethod
+    def rewrite(self, table: str, rows: list[dict[str, Any]]) -> None:
+        """Replace the table's contents with ``rows`` (used by compaction)."""
+
+    def compact(self, table: str, *, now: float = 0.0, keep_history: bool = True) -> dict[str, Any]:
+        """Coalesce the append log: dedup replay rows by ``_txn``, drop fully
+        tombstoned docs and rows past ``_expire_at``. With ``keep_history=False``
+        also collapse to the latest version per doc. Returns before/after counts."""
+        rows = self.scan(table)
+        before = len(rows)
+        # 1) Dedup replay artifacts (same doc + txn appended more than once).
+        by_txn = {(r.get("_doc_id"), r.get("_txn")): r for r in rows}
+        deduped = list(by_txn.values())
+        # 2) Find docs whose latest version is a delete tombstone.
+        latest: dict[Any, dict[str, Any]] = {}
+        for r in deduped:
+            did = r.get("_doc_id")
+            if did is None:
+                continue
+            cur = latest.get(did)
+            if cur is None or r.get("_version", 0) >= cur.get("_version", 0):
+                latest[did] = r
+        dead = {d for d, r in latest.items() if r.get("_op") == "delete"}
+        # 3) Drop tombstoned docs + expired rows (+ old versions if collapsing).
+        kept = []
+        for r in deduped:
+            did = r.get("_doc_id")
+            if did in dead:
+                continue
+            if now and r.get("_expire_at") and r["_expire_at"] <= now:
+                continue
+            if not keep_history and r is not latest.get(did):
+                continue
+            kept.append(r)
+        self.rewrite(table, kept)
+        return {"table": table, "before": before, "after": len(kept), "removed": before - len(kept)}
+
     def count(self, table: str) -> int:
         return len(self.scan(table))
 
@@ -81,6 +118,10 @@ class InMemoryWarehouse(Warehouse):
 
     def scan(self, table: str) -> list[dict[str, Any]]:
         return list(self._log.get(table, {}).values())
+
+    def rewrite(self, table: str, rows: list[dict[str, Any]]) -> None:
+        # Re-key by (doc_id, txn) so idempotent append semantics are preserved.
+        self._log[table] = {f"{r.get('_doc_id')}:{r.get('_txn')}": dict(r) for r in rows}
 
     def expire(self, table: str, now: float) -> int:
         rows = self._log.get(table, {})
@@ -177,6 +218,16 @@ class IcebergWarehouse(Warehouse):  # pragma: no cover - needs catalog + pyarrow
     def scan(self, table: str) -> list[dict[str, Any]]:
         tbl = self._catalog.load_table(table)
         return tbl.scan().to_arrow().to_pylist()
+
+    def rewrite(self, table: str, rows: list[dict[str, Any]]) -> None:
+        # Atomic table replace: one Iceberg snapshot holding the compacted rows
+        # (also coalesces small files). Time-travel to prior snapshots still works.
+        import pyarrow as pa
+
+        tbl = self._catalog.load_table(table)
+        arrow = pa.Table.from_pylist(rows, schema=tbl.schema().as_arrow()) if rows \
+            else tbl.scan().to_arrow().schema.empty_table()
+        tbl.overwrite(arrow)
 
     def expire(self, table: str, now: float) -> int:
         # Physical expiry on Iceberg is a compaction/DELETE concern; the scheduled

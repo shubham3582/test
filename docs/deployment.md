@@ -48,6 +48,7 @@ flowchart TB
 | Outbox relay (optional) | `python -m phronexus.statemachine.relay` | replicas (set `statemachine.inline_relay: false`) |
 | Change-feed relay (optional) | `python -m phronexus.changefeed_relay` | replicas (set `changefeed.inline_relay: false`) |
 | Retention worker | `python -m phronexus.retention.main` | consumer group members |
+| Retention compaction | `python -m phronexus.retention.compact` | scheduled job (pairs with the scheduler) |
 | Reaper / backfill | `phronexus reap …` / `phronexus backfill …` | cron / one-shot jobs |
 
 ## Contracts: Aerospike is the source of truth

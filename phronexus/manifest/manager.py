@@ -95,7 +95,7 @@ class ManifestManager:
 
     # --- write ----------------------------------------------------------
 
-    def write(self, entity: str, document: dict[str, Any]) -> str:
+    def write(self, entity: str, document: dict[str, Any], *, relay: bool = True) -> str:
         with self._tel.span("manifest.write", entity=entity), self._tel.timed(
             "phronexus.write.latency", entity=entity
         ):
@@ -112,8 +112,17 @@ class ManifestManager:
                     self._tel.incr("phronexus.write.conflicts", entity=entity)
                     if attempt >= self._write_max_retries:
                         raise
-            self.post_write(staged, document)
+            self.post_write(staged, document, relay=relay)
             return staged.doc_id
+
+    def write_many(self, entity: str, documents: list[dict[str, Any]]) -> list[str]:
+        """Bulk write: one transaction per document (each has its own manifest
+        CAS), but the change-feed is relayed **once** at the end instead of per
+        document — a big win for bulk ingestion."""
+        ids = [self.write(entity, d, relay=False) for d in documents]
+        if self._inline_changefeed:
+            self.drain_changefeed()
+        return ids
 
     def stage_write(self, entity: str, document: dict[str, Any], txn) -> "StagedWrite":
         """Stage projections + manifest into ``txn`` without committing.
@@ -185,14 +194,15 @@ class ManifestManager:
             records=records, old_data=old_data, existing=existing, ts=ts,
         )
 
-    def post_write(self, staged: "StagedWrite", document: dict[str, Any]) -> None:
+    def post_write(self, staged: "StagedWrite", document: dict[str, Any], *, relay: bool = True) -> None:
         """Post-commit side effects for a staged write."""
         self._tel.incr("phronexus.writes", entity=staged.entity)
         if not self._index_in_txn:
             self._reindex(staged.entity, staged.doc_id, staged.old_data, document)
         self._reap_superseded(staged.existing, staged.records, staged.sc)
         # The change-feed event is already durably staged; relay it to the sink.
-        if self._inline_changefeed:
+        # Bulk callers pass relay=False and drain once at the end.
+        if relay and self._inline_changefeed:
             self.drain_changefeed()
         log.info("document.committed", entity=staged.entity, doc_id=staged.doc_id, txn=staged.txn_id)
 

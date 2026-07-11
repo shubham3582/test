@@ -275,6 +275,10 @@ class IndexSettings(BaseModel):
     # Set false to update post-commit (derived) — cheaper on hot terms, but a
     # crash between commit and reindex misses entries until a rebuild/backfill.
     in_txn: bool = True
+    # Posting lists are stored as bounded segments: appends touch only the open
+    # head segment (sealed at this size), so adding to a hot term stays O(segment)
+    # instead of O(list) — the difference between O(N) and O(N^2) bulk ingest.
+    segment_size: int = 512
 
 
 class StateMachineSettings(BaseModel):

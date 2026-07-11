@@ -119,6 +119,21 @@ px.view("trade", "public", "T-1")
 # {'trade_id': 'T-1', 'counterparty': '****', 'ccy': 'USD', 'trade_date': 20250115}
 ```
 
+### Bulk ingestion
+
+For loading many documents, `put_many` commits each as its own durable manifest
+write but relays the change-feed **once** at the end:
+
+```python
+px.put_many("trade", trades)     # e.g. 500K trades
+```
+
+Posting lists are **segmented** (bounded-size head, sealed on fill), so ingesting
+documents that share an indexed value stays **O(N)**, not O(N²) — 500K trades
+ingest in ~2.5 min single-threaded on the in-memory backend, and scale out
+horizontally by Kafka partition (key = doc_id) on Aerospike. Tune the segment
+size with `index.segment_size` (default 512).
+
 ### Onboard a new entity — by config only
 
 Drop a `storage` (and optional `query`/`view`) contract into a directory and

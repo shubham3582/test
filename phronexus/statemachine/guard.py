@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import operator
+from functools import lru_cache
 from typing import Any
 
 from phronexus.errors import GuardError
@@ -26,12 +27,19 @@ _CMP = {
 }
 
 
-def safe_eval(expr: str, context: dict[str, Any]) -> bool:
+@lru_cache(maxsize=2048)
+def _parse(expr: str) -> ast.Expression:
+    """Parse (and cache) an expression AST — the same guard/DQ string is evaluated
+    on every document, so parsing once per distinct expression is a big win on the
+    hot write path."""
     try:
-        tree = ast.parse(expr, mode="eval")
+        return ast.parse(expr, mode="eval")
     except SyntaxError as exc:
         raise GuardError(f"invalid guard expression: {expr!r}") from exc
-    return bool(_eval(tree.body, context))
+
+
+def safe_eval(expr: str, context: dict[str, Any]) -> bool:
+    return bool(_eval(_parse(expr).body, context))
 
 
 def _eval(node: ast.AST, ctx: dict[str, Any]) -> Any:

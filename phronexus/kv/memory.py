@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Optional
 
-from phronexus.errors import GenerationConflict, StorageError
+from phronexus.errors import GenerationConflict
 from phronexus.kv.base import KVStore, Record, Transaction, TransactionContext
 
 
@@ -80,17 +80,22 @@ class _MemTxn:
 
 class InMemoryKV(KVStore):
     def __init__(self) -> None:
-        self._data: dict[tuple[str, str], _Cell] = {}
+        # Indexed by set so scan() is O(set size), not O(total store) — otherwise
+        # per-write outbox drains turn bulk ingest into O(N^2).
+        self._sets: dict[str, dict[str, _Cell]] = {}
         self._lock = threading.RLock()
 
     # --- internal helpers (call with lock held) -------------------------
 
     def _live(self, set_name: str, key: str) -> Optional[_Cell]:
-        cell = self._data.get((set_name, key))
+        bucket = self._sets.get(set_name)
+        if bucket is None:
+            return None
+        cell = bucket.get(key)
         if cell is None:
             return None
         if cell.expire_at is not None and cell.expire_at <= time.monotonic():
-            del self._data[(set_name, key)]
+            del bucket[key]
             return None
         return cell
 
@@ -102,11 +107,15 @@ class InMemoryKV(KVStore):
         cell = self._live(set_name, key)
         gen = (cell.generation if cell else 0) + 1
         expire = time.monotonic() + ttl if ttl and ttl > 0 else None
-        self._data[(set_name, key)] = _Cell(bins=dict(bins), generation=gen, expire_at=expire)
+        self._sets.setdefault(set_name, {})[key] = _Cell(
+            bins=dict(bins), generation=gen, expire_at=expire
+        )
         return gen
 
     def _raw_remove(self, set_name, key) -> None:
-        self._data.pop((set_name, key), None)
+        bucket = self._sets.get(set_name)
+        if bucket is not None:
+            bucket.pop(key, None)
 
     # --- KVStore API ----------------------------------------------------
 
@@ -162,7 +171,7 @@ class InMemoryKV(KVStore):
 
     def scan(self, set_name) -> Iterator[tuple[str, Record]]:
         with self._lock:
-            keys = [k for (s, k) in self._data if s == set_name]
+            keys = list(self._sets.get(set_name, {}).keys())
         for key in keys:
             with self._lock:
                 cell = self._live(set_name, key)
@@ -175,4 +184,4 @@ class InMemoryKV(KVStore):
     def flush(self) -> None:
         """Test helper: drop everything."""
         with self._lock:
-            self._data.clear()
+            self._sets.clear()
