@@ -71,6 +71,7 @@ class ManifestManager:
         sink: EventSink,
         telemetry: Telemetry,
         validator=None,
+        index_in_txn: bool = True,
     ):
         self._store = store
         self._registry = registry
@@ -78,6 +79,7 @@ class ManifestManager:
         self._sink = sink
         self._tel = telemetry
         self._validator = validator
+        self._index_in_txn = index_in_txn
         self._proj = ProjectionEngine()
 
     # --- write ----------------------------------------------------------
@@ -140,6 +142,10 @@ class ManifestManager:
         self._store.put(
             sc.manifest_set, doc_id, manifest_bins, expected_generation=expected_gen, txn=txn
         )
+        # Stage the inverted-index update into the SAME transaction so a committed
+        # document can never be missing from search (no crash window).
+        if self._index_in_txn:
+            self._stage_reindex(entity, doc_id, old_data, document, txn)
         return StagedWrite(
             entity=entity, doc_id=doc_id, txn_id=txn_id, sc=sc,
             records=records, old_data=old_data, existing=existing, ts=ts,
@@ -148,7 +154,8 @@ class ManifestManager:
     def post_write(self, staged: "StagedWrite", document: dict[str, Any]) -> None:
         """Post-commit side effects for a staged write."""
         self._tel.incr("phronexus.writes", entity=staged.entity)
-        self._reindex(staged.entity, staged.doc_id, staged.old_data, document)
+        if not self._index_in_txn:
+            self._reindex(staged.entity, staged.doc_id, staged.old_data, document)
         self._reap_superseded(staged.existing, staged.records, staged.sc)
         self._sink.emit(
             CommitEvent(
@@ -204,6 +211,8 @@ class ManifestManager:
                         sc.manifest_set, doc_id, new_bins,
                         expected_generation=expected_gen, txn=txn,
                     )
+                    if self._index_in_txn:
+                        self._stage_deindex(entity, doc_id, old_data, txn)
             else:  # hard delete: remove projections then manifest
                 with self._store.transaction() as txn:
                     for p in manifest.bins.get(M_PROJECTIONS, []):
@@ -211,8 +220,11 @@ class ManifestManager:
                     self._store.remove(
                         sc.manifest_set, doc_id, expected_generation=expected_gen, txn=txn
                     )
+                    if self._index_in_txn:
+                        self._stage_deindex(entity, doc_id, old_data, txn)
 
-            self._deindex(entity, doc_id, old_data)
+            if not self._index_in_txn:
+                self._deindex(entity, doc_id, old_data)
             self._tel.incr("phronexus.deletes", entity=entity)
             self._sink.emit(
                 CommitEvent(
@@ -230,6 +242,25 @@ class ManifestManager:
             return self._registry.active_query(entity).searchable
         except ContractNotFound:
             return []  # no query contract yet -> nothing to index
+
+    def _stage_reindex(self, entity, doc_id, old_data, new_doc, txn) -> None:
+        """Stage index add/removes into the write transaction (atomic)."""
+        for sf in self._searchable(entity):
+            old_v = old_data.get(sf.field, _MISSING)
+            new_v = new_doc.get(sf.field, _MISSING)
+            if old_v == new_v:
+                continue
+            if old_v is not _MISSING:
+                self._index.stage_remove(entity, sf.field, old_v, doc_id, txn=txn)
+            if new_v is not _MISSING:
+                self._index.stage_add(entity, sf.field, new_v, doc_id,
+                                      numeric=sf.supports_range, txn=txn)
+
+    def _stage_deindex(self, entity, doc_id, old_data, txn) -> None:
+        for sf in self._searchable(entity):
+            v = old_data.get(sf.field, _MISSING)
+            if v is not _MISSING:
+                self._index.stage_remove(entity, sf.field, v, doc_id, txn=txn)
 
     def _reindex(self, entity, doc_id, old_data, new_doc) -> None:
         for sf in self._searchable(entity):

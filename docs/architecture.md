@@ -84,10 +84,10 @@ sequenceDiagram
     rect rgb(235,245,255)
       note over M,S: one native transaction (8.0+) — all or nothing
       M->>S: put projection records (stamped with txn_id)
+      M->>I: stage inverted-index add/removes (same txn)
       M->>S: put manifest (CAS on generation) ← commit point
     end
-    M->>I: reindex searchable fields (derived)
-    M->>K: emit CommitEvent
+    M->>K: emit CommitEvent (change-feed)
     M-->>C: doc_id
 ```
 
@@ -95,8 +95,13 @@ sequenceDiagram
 - **Snapshot reads**: reads resolve the manifest → committed projections whose
   `txn_id` matches.
 - **Crash safety**: partial writes leave invisible orphans, swept by the reaper.
-- The **inverted index** is a derived hint — a stale posting is validated away on
-  read; the document is always addressable by primary key.
+- **Index atomicity**: inverted-index mutations are staged into the *same*
+  transaction as the manifest (`index.in_txn`, default on), so a committed
+  document can never be missing from search. A stale posting (from a since-aged
+  read) is still validated away on read; the document is always addressable by
+  primary key. Set `index.in_txn: false` to update the index post-commit
+  (cheaper on hot terms, but a crash between commit and reindex misses entries
+  until a backfill).
 
 ## The transactional state machine
 

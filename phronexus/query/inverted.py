@@ -94,6 +94,40 @@ class InvertedIndex:
             except GenerationConflict:
                 continue
 
+    # --- transactional maintenance --------------------------------------
+    # These stage a single read-modify-write into a caller's transaction, so
+    # index mutations commit atomically with the manifest (no CAS retry — the
+    # transaction provides isolation; a conflict aborts the whole write).
+
+    def stage_add(self, entity, field, value, doc_id, *, numeric: bool, txn) -> None:
+        key = _posting_key(entity, field, value)
+        rec = self._store.get(self._set, key, txn=txn)
+        docs = list(rec.bins.get("docs", [])) if rec else []
+        if doc_id not in docs:
+            docs.append(doc_id)
+            self._store.put(self._set, key, {"docs": docs}, txn=txn)
+        if numeric:
+            self._stage_add_term(entity, field, value, txn)
+
+    def stage_remove(self, entity, field, value, doc_id, *, txn) -> None:
+        key = _posting_key(entity, field, value)
+        rec = self._store.get(self._set, key, txn=txn)
+        if rec is None:
+            return
+        docs = [d for d in rec.bins.get("docs", []) if d != doc_id]
+        if docs:
+            self._store.put(self._set, key, {"docs": docs}, txn=txn)
+        else:
+            self._store.remove(self._set, key, txn=txn)
+
+    def _stage_add_term(self, entity, field, value, txn) -> None:
+        key = _terms_key(entity, field)
+        rec = self._store.get(self._set, key, txn=txn)
+        terms = list(rec.bins.get("terms", [])) if rec else []
+        if value not in terms:
+            terms.append(value)
+            self._store.put(self._set, key, {"terms": terms}, txn=txn)
+
     # --- lookups --------------------------------------------------------
 
     def lookup_eq(self, entity: str, field: str, value: Any) -> set[str]:

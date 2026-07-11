@@ -228,6 +228,14 @@ class ContractSettings(BaseModel):
     background_refresh: bool = False
 
 
+class IndexSettings(BaseModel):
+    # Update the inverted index inside the write transaction (atomic with the
+    # manifest) so a crash can never leave a committed document unindexed.
+    # Set false to update post-commit (derived) — cheaper on hot terms, but a
+    # crash between commit and reindex misses entries until a rebuild/backfill.
+    in_txn: bool = True
+
+
 class StateMachineSettings(BaseModel):
     # Sets backing the transactional outbox and the input-dedup markers.
     outbox_set: str = "_sm_outbox"
@@ -350,6 +358,7 @@ class Settings(BaseSettings):
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     contracts: ContractSettings = Field(default_factory=ContractSettings)
     reaper: ReaperSettings = Field(default_factory=ReaperSettings)
+    index: IndexSettings = Field(default_factory=IndexSettings)
     statemachine: StateMachineSettings = Field(default_factory=StateMachineSettings)
 
     @classmethod

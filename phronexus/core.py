@@ -96,7 +96,7 @@ class Phronexus:
         self.validator = Validator(self.registry)
         self.manifest = ManifestManager(
             self.store, self.registry, self.index, self.sink, self.telemetry,
-            validator=self.validator,
+            validator=self.validator, index_in_txn=self.settings.index.in_txn,
         )
         # Wire store lookups now that the manifest/index exist (enables the
         # unique / references DQ checks).
