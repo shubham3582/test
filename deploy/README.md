@@ -35,7 +35,7 @@ docker compose down -v
 
 | Service | Image | Ports | Notes |
 |---|---|---|---|
-| `phx-aerospike` | `aerospike/aerospike-server:7.1.0.0` (CE) | 3000 | operational store |
+| `phx-aerospike` | `aerospike/aerospike-server:latest` (CE) | 3000 | operational store |
 | `phx-redpanda` | `redpandadata/redpanda:v24.1.7` | 9092, 9644 | Kafka API + admin |
 | `phx-api` | built from `../Dockerfile` | 8080 | REST API |
 | `phx-runner` | built from `../Dockerfile` | — | optional (profile `workers`) |

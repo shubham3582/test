@@ -6,7 +6,7 @@
 # add `platform: linux/amd64` to that service (Docker Desktop emulates it).
 services:
   aerospike:
-    image: aerospike/aerospike-server:7.1.0.0     # Community Edition
+    image: aerospike/aerospike-server:latest      # Community Edition (latest)
     container_name: phx-aerospike
     ports: ["3000:3000"]
     volumes:
