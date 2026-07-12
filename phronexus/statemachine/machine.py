@@ -16,7 +16,12 @@ from typing import Optional
 import structlog
 
 from phronexus.config import StateMachineSettings
-from phronexus.errors import DocumentAlreadyExists, TransitionRejected, ValidationError
+from phronexus.errors import (
+    DocumentAlreadyExists,
+    GenerationConflict,
+    TransitionRejected,
+    ValidationError,
+)
 from phronexus.statemachine.guard import safe_eval
 from phronexus.statemachine.hooks import TransitionContext
 from phronexus.statemachine.io import MemoryOutputPublisher, OutputPublisher
@@ -64,6 +69,24 @@ class StateMachine:
             log.warning("statemachine.journal_failed", event_id=event.event_id)
 
     def _process(self, event: InputEvent) -> ProcessResult:
+        # A concurrent writer on the same document makes the manifest CAS raise
+        # GenerationConflict at commit. Re-process from a fresh read (the state
+        # may have moved — the event might now be a duplicate, a different
+        # transition, or a reject) instead of crashing the runner. On exhaustion
+        # return a reject, which the runner dead-letters.
+        retries = getattr(self._manifest, "_write_max_retries", 3)
+        for attempt in range(retries + 1):
+            try:
+                return self._process_once(event)
+            except GenerationConflict:
+                self._px.telemetry.incr("phronexus.sm.conflicts", entity=event.entity)
+                if attempt >= retries:
+                    return ProcessResult(
+                        status="rejected",
+                        reason="write conflict: concurrent update, retries exhausted",
+                    )
+
+    def _process_once(self, event: InputEvent) -> ProcessResult:
         with self._px.telemetry.span("statemachine.process", entity=event.entity):
             tc = self._registry.active_transition(event.entity)
 
@@ -140,13 +163,25 @@ class StateMachine:
                     reason="validation (event schema): " + "; ".join(ev_errors),
                 )
 
+            def _stage_outputs(txn):
+                # Staged BEFORE the manifest commit point: a committed transition
+                # always implies its output events are durable (never lost, even
+                # on a non-transactional crash).
+                for i, oe in enumerate(outs):
+                    self._store.put(
+                        self._cfg.outbox_set, f"{event.event_id}:{i}", oe.to_dict(), txn=txn
+                    )
+
             try:
                 with self._store.transaction(native=self._manifest.native_txn_for(event.entity)) as txn:
-                    staged = self._manifest.stage_write(event.entity, new_doc, txn)
-                    for i, oe in enumerate(outs):
-                        self._store.put(
-                            self._cfg.outbox_set, f"{event.event_id}:{i}", oe.to_dict(), txn=txn
-                        )
+                    staged = self._manifest.stage_write(
+                        event.entity, new_doc, txn, stage_extra=_stage_outputs
+                    )
+                    # Dedup marker AFTER the manifest: if a CE crash orphans it, a
+                    # replay must NOT see a false "duplicate" and skip a write that
+                    # never committed (that would be a lost update). Under native
+                    # txn the whole block is atomic (dedup present iff committed),
+                    # which is why the output relay gates on this marker.
                     self._store.put(
                         self._cfg.dedup_set, event.event_id,
                         {"doc_id": staged.doc_id, "ts": now},
@@ -185,9 +220,23 @@ class StateMachine:
     # --- outbox relay ---------------------------------------------------
 
     def drain_outbox(self, max_events: int = 1000) -> int:
-        """Publish and remove queued outbox events. Safe to call repeatedly."""
+        """Publish and remove queued outbox events. Safe to call repeatedly.
+
+        Only outputs whose transition actually committed are relayed: the dedup
+        marker is written in the same transaction as the state + outputs, so its
+        presence proves the transition committed. This stops a phantom output
+        from an uncommitted (crashed) transition — the outputs are staged before
+        the manifest, so without this gate a non-transactional crash could leave
+        orphan outputs in the outbox.
+        """
         published = 0
         for key, rec in list(self._store.scan(self._cfg.outbox_set)):
+            # DLQ rows (dead-lettered rejects) always relay — a reject is a real
+            # fact even though nothing committed, so they carry no dedup marker.
+            if not key.startswith("dlq:"):
+                event_id = key.rsplit(":", 1)[0]
+                if self._store.get(self._cfg.dedup_set, event_id) is None:
+                    continue  # transition did not commit -> do not emit a phantom
             b = rec.bins
             try:
                 self._out.publish(OutputEvent(
@@ -206,7 +255,13 @@ class StateMachine:
     # --- dead-letter ----------------------------------------------------
 
     def dead_letter(self, event: InputEvent, result: ProcessResult) -> bool:
-        """Route a rejected/poison event to the DLQ topic (if configured)."""
+        """Durably route a rejected/poison event to the DLQ topic (if configured).
+
+        The DLQ event is staged into the transactional outbox FIRST, then relayed.
+        If the publish fails it stays in the outbox for :meth:`drain_outbox` to
+        retry — so a rejected event is never silently dropped, even though the
+        runner commits the input offset regardless of publish success.
+        """
         topic = self._cfg.dlq_topic
         if not topic:
             return False
@@ -219,17 +274,33 @@ class StateMachine:
             },
             ts=time.time(), cause_event_id=event.event_id,
         )
+        key = f"dlq:{event.event_id}"
+        self._store.put(self._cfg.outbox_set, key, oe.to_dict())  # durable first
+        self._px.telemetry.incr("phronexus.sm.dead_lettered", entity=event.entity)
         try:
             self._out.publish(oe)
-        except Exception:  # noqa: BLE001
-            log.warning("statemachine.dlq_publish_failed", event_id=event.event_id)
-            return False
-        self._px.telemetry.incr("phronexus.sm.dead_lettered", entity=event.entity)
+            self._store.remove(self._cfg.outbox_set, key)
+        except Exception:  # noqa: BLE001 - keep it durable for retry
+            log.warning("statemachine.dlq_publish_deferred", event_id=event.event_id)
         return True
 
 
 def build_state_machine(px, output: Optional[OutputPublisher] = None,
                         hooks: Optional[list] = None) -> StateMachine:
+    # Fail fast: the saga's exactly-once guarantee requires atomic multi-record
+    # transactions. Refuse to run on a backend that can't provide them unless the
+    # operator explicitly opts into best-effort (at-least-once) mode.
+    scfg = px.settings.statemachine
+    if scfg.require_atomic and not px.store.supports_atomic_txn():
+        from phronexus.errors import ConfigError
+
+        raise ConfigError(
+            "state machine requires atomic multi-record transactions for "
+            "exactly-once processing, but the store does not provide them "
+            "(Aerospike: set aerospike.use_native_txn=true on an 8.0+ cluster). "
+            "Set statemachine.require_atomic=false to run in best-effort "
+            "(at-least-once) mode."
+        )
     journal = None
     jcfg = px.settings.journal
     if jcfg.enabled and jcfg.journal_requests:

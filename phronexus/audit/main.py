@@ -36,6 +36,18 @@ def _entities(registry: ContractRegistry) -> list[str]:
     })
 
 
+def consume_once(worker, source, max_events: int = 500) -> int:
+    """Poll a batch, record it, then commit — commit only after durable record
+    (replay is safe: audit rows are idempotent by txn). Returns events handled."""
+    events = source.poll(max_events)
+    if events:
+        worker.process(events)
+    commit = getattr(source, "commit", None)
+    if commit is not None:
+        commit()
+    return len(events)
+
+
 def main() -> None:  # pragma: no cover - process entrypoint
     settings = Settings()
     configure_logging(settings.observability)
@@ -58,28 +70,31 @@ def main() -> None:  # pragma: no cover - process entrypoint
     poll = settings.scheduler.poll_seconds
     entities: list[str] = []
     source: KafkaEventSource | None = None
+    backoff = 1.0
     log.info("audit.start", set=settings.audit.audit_set)
     try:
         while not stop.is_set():
-            registry.refresh(force=True)
-            current = _entities(registry)
-            if current != entities:
+            try:
+                registry.refresh(force=True)
+                current = _entities(registry)
+                if current != entities:
+                    if source is not None:
+                        source.close()
+                    entities = current
+                    source = (
+                        KafkaEventSource(settings.kafka, entities, group_id="phronexus-audit")
+                        if entities
+                        else None
+                    )
+                    log.info("audit.subscribed", entities=entities)
                 if source is not None:
-                    source.close()
-                entities = current
-                source = (
-                    KafkaEventSource(settings.kafka, entities, group_id="phronexus-audit")
-                    if entities
-                    else None
-                )
-                log.info("audit.subscribed", entities=entities)
-            if source is not None:
-                events = source.poll(500)
-                if events:
-                    worker.process(events)
-                # Commit only after the batch is durably recorded (replay is safe).
-                source.commit()
-            stop.wait(poll if not entities else 1.0)
+                    consume_once(worker, source)
+                backoff = 1.0  # progress -> reset
+                stop.wait(poll if not entities else 1.0)
+            except Exception as exc:  # noqa: BLE001 - transient broker/store error
+                log.warning("audit.iteration_failed", error=str(exc), retry_in_s=round(backoff, 1))
+                stop.wait(backoff)
+                backoff = min(backoff * 2, 30.0)
     finally:
         if source is not None:
             source.close()

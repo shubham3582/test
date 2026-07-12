@@ -48,6 +48,29 @@ def decode(row: dict[str, Any]) -> Any:
     return codec.unpack(raw) if raw is not None else None
 
 
+def _row_key(row: dict[str, Any]) -> tuple[Any, Any]:
+    """The physical idempotency key of a retention row: (doc id, txn)."""
+    return (row.get("_doc_id"), row.get("_txn"))
+
+
+def dedup_new(rows: list[dict[str, Any]], existing_keys: set) -> list[dict[str, Any]]:
+    """Rows from ``rows`` whose ``(_doc_id, _txn)`` is not already present.
+
+    This is the cross-batch idempotence guard: a redelivered or replayed txn
+    (e.g. a crash after an Iceberg flush but before the Kafka offset commit, so
+    the event is delivered again in a *later* batch) must not append a second
+    physical row. Deduping only within a single flush buffer is not enough.
+    """
+    out, seen = [], set(existing_keys)
+    for r in rows:
+        k = _row_key(r)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out
+
+
 class Warehouse(abc.ABC):
     @abc.abstractmethod
     def append(self, table: str, idem_key: str, row: dict[str, Any]) -> None:
@@ -165,15 +188,44 @@ class IcebergWarehouse(Warehouse):  # pragma: no cover - needs catalog + pyarrow
     def flush(self) -> None:
         import pyarrow as pa
 
-        for table, rows in self._buffers.items():
+        for table, buffered in self._buffers.items():
+            if not buffered:
+                continue
+            # Cross-batch idempotence: drop any row whose (_doc_id,_txn) is already
+            # in the table, so a replayed/redelivered txn appends no second row.
+            rows = dedup_new(list(buffered.values()),
+                             self._existing_txn_keys(table, buffered.values()))
             if not rows:
                 continue
-            arrow = pa.Table.from_pylist(list(rows.values()))
+            arrow = pa.Table.from_pylist(rows)
             tbl = self._ensure_table(table, arrow.schema)
             # Conform the batch to the table's schema (add missing columns as
             # nulls, order to match) so appends survive per-batch key drift.
             tbl.append(self._conform(arrow, tbl.schema().as_arrow()))
         self._buffers.clear()
+
+    def _existing_txn_keys(self, table: str, rows) -> set:
+        """The ``(_doc_id,_txn)`` pairs already in ``table`` for the batch's txns.
+
+        Scoped by a ``_txn IN (...)`` row filter + column projection so it reads
+        only the few rows that could collide, not the whole table.
+        """
+        from pyiceberg.exceptions import NoSuchTableError
+        from pyiceberg.expressions import In
+
+        txns = {r.get("_txn") for r in rows if r.get("_txn") is not None}
+        if not txns:
+            return set()
+        try:
+            tbl = self._catalog.load_table(table)
+        except NoSuchTableError:
+            return set()  # first write to this table — nothing pre-exists
+        scanned = (
+            tbl.scan(row_filter=In("_txn", list(txns)),
+                     selected_fields=("_doc_id", "_txn"))
+            .to_arrow().to_pylist()
+        )
+        return {_row_key(r) for r in scanned}
 
     def _ensure_table(self, table: str, arrow_schema):
         """Load the table, creating the namespace + table on first use.

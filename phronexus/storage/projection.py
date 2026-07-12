@@ -7,6 +7,8 @@ small envelope of reserved bins:
     _txn    : id of the write that produced this record (see the manifest)
     _cver   : storage-contract version used
     _pjn    : projection name
+    _ts     : wall-clock write time — lets the reaper distinguish a young,
+              still-in-flight write from a genuinely orphaned one (grace period)
 
 Keeping data in one ``doc`` bin avoids collisions with the reserved envelope and
 makes both canonical reconstruction and index extraction trivial.
@@ -15,7 +17,7 @@ makes both canonical reconstruction and index extraction trivial.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 from phronexus import codec
 from phronexus.contracts.models import Projection, StorageContract
@@ -26,10 +28,11 @@ META_DOC_ID = "_doc_id"
 META_TXN = "_txn"
 META_CVER = "_cver"
 META_PJN = "_pjn"
+META_TS = "_ts"
 
 # Reserved envelope bins — never treated as document data when reconstructing a
 # ``bins``-encoded record.
-_RESERVED = {DOC_BIN, META_DOC_ID, META_TXN, META_CVER, META_PJN}
+_RESERVED = {DOC_BIN, META_DOC_ID, META_TXN, META_CVER, META_PJN, META_TS}
 
 
 def encode_payload(projection: Projection, data: dict[str, Any]) -> dict[str, Any]:
@@ -116,6 +119,7 @@ class ProjectionEngine:
         *,
         doc_id: str,
         txn_id: str,
+        ts: Optional[float] = None,
     ) -> list[ProjectionRecord]:
         records: list[ProjectionRecord] = []
         for p in contract.projections:
@@ -131,5 +135,7 @@ class ProjectionEngine:
                 META_CVER: contract.version,
                 META_PJN: p.name,
             }
+            if ts is not None:
+                bins[META_TS] = ts
             records.append(ProjectionRecord(projection=p, key=key, bins=bins, ttl=p.ttl, data=data))
         return records

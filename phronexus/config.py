@@ -267,6 +267,14 @@ class ChangeFeedSettings(BaseModel):
     # relay (python -m phronexus.changefeed_relay).
     inline_relay: bool = True
     relay_poll_seconds: float = 1.0
+    # Verify the document actually committed before relaying its change event.
+    # Under native multi-record transactions the outbox and manifest commit
+    # atomically, so this is unnecessary (default False, no per-event overhead).
+    # Without native txns (Aerospike CE) a crash between the outbox write and the
+    # manifest can leave a "phantom" event for a doc that never committed; enable
+    # this so the relay skips such rows (the reaper then removes them). Auto-
+    # enabled when aerospike.use_native_txn is False.
+    verify_commit: bool = False
 
 
 class IndexSettings(BaseModel):
@@ -285,7 +293,11 @@ class StateMachineSettings(BaseModel):
     # Sets backing the transactional outbox and the input-dedup markers.
     outbox_set: str = "_sm_outbox"
     dedup_set: str = "_sm_dedup"
-    dedup_ttl: int = 604800  # 7 days; markers past redelivery windows can expire
+    # Dedup-marker lifetime. 7 days by default: a redelivery beyond this window
+    # is reprocessed against current state (and, being state-guarded, rejected —
+    # never applied twice). Set 0 to keep markers forever (absolute dedup, no
+    # late reprocessing) at the cost of unbounded marker growth.
+    dedup_ttl: int = 604800
     # Kafka topic the autonomous runner consumes domain events from (if wired).
     input_topics: list[str] = Field(default_factory=list)
     consumer_group: str = "phronexus-statemachine"
@@ -302,6 +314,11 @@ class StateMachineSettings(BaseModel):
     http_headers: dict[str, str] = Field(default_factory=dict)
     # Topic that rejected/poison events are dead-lettered to (None disables).
     dlq_topic: str | None = None
+    # The saga's "state + outputs + dedup" commit is only atomic under native
+    # multi-record transactions; without them exactly-once cannot be guaranteed.
+    # Fail fast at construction unless the operator explicitly opts into the
+    # weaker best-effort (at-least-once) mode by setting this False.
+    require_atomic: bool = True
 
 
 class JournalSettings(BaseModel):

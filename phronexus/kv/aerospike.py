@@ -12,9 +12,13 @@ import contextlib
 import time
 from typing import Any, Iterator, Optional
 
+import structlog
+
 from phronexus.config import AerospikeSettings
 from phronexus.errors import ConfigError, GenerationConflict, StorageError
 from phronexus.kv.base import KVStore, Record, Transaction, TransactionContext
+
+log = structlog.get_logger("phronexus.aerospike")
 
 # OTLP metrics emitted per operation (consumable by Dynatrace / CloudWatch via
 # the OTel collector). One histogram + one counter, tagged by op and outcome.
@@ -116,11 +120,16 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
     # --- per-operation metrics ------------------------------------------
 
     def _record(self, op: str, outcome: str, start: float, error: Optional[str] = None) -> None:
-        self._tel.observe(_M_DURATION, (time.perf_counter() - start) * 1000.0, op=op, outcome=outcome)
+        ms = (time.perf_counter() - start) * 1000.0
+        self._tel.observe(_M_DURATION, ms, op=op, outcome=outcome)
         attrs = {"op": op, "outcome": outcome}
         if error is not None:
             attrs["error"] = error
         self._tel.incr(_M_COUNT, 1.0, **attrs)
+        # Per-op latency in the logs (DEBUG only — a no-op at INFO+, and it
+        # auto-carries the bound request_id, so you can see the Aerospike time
+        # for each request without a metrics backend).
+        log.debug("aerospike.op", op=op, ms=round(ms, 3), outcome=outcome)
 
     @contextlib.contextmanager
     def _op(self, op: str):
@@ -138,6 +147,11 @@ class AerospikeKV(KVStore):  # pragma: no cover - needs a live cluster
             raise
         finally:
             self._record(op, outcome, start, error)
+
+    def supports_atomic_txn(self) -> bool:
+        # Atomic only when native multi-record transactions are enabled AND the
+        # installed client exposes them (Aerospike 8.0+ / recent client).
+        return bool(self.cfg.use_native_txn and hasattr(aerospike, "Transaction"))
 
     def native_client(self):
         """The connected native ``aerospike.Client`` (supported escape hatch).

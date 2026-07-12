@@ -9,11 +9,13 @@
 | [storage-layouts.md](storage-layouts.md) | Physical storage options: `map`/`msgpack`/`bins` encoding, `bin_map`, `spread`, `native_txn`, and batch reads — with worked layouts. |
 | [state-machine.md](state-machine.md) | The transactional state machine in depth: atomicity model, hooks, output routing, the three faces. |
 | [ccr-reference.md](ccr-reference.md) | End-to-end reference: Counterparty-Credit-Risk saga, the hot value cube, and the exactly-once scheduler — all as config. |
+| [ccr-architecture.md](ccr-architecture.md) | Reference architecture: Phronexus as the hot-tier data plane for a fleet of CCR compute services — boundaries, who-owns-what, and the five disciplines. |
 | [retention-and-journals.md](retention-and-journals.md) | Insert-only, idempotent retention log (self-reconciling on replay) and the binary msgpack journals for messages and request/response pairs. |
 | [deployment.md](deployment.md) | Production: Aerospike / MSK / S3 Tables, TLS/mTLS, auth, observability, operations, scaling. |
 | [logging.md](logging.md) | The one place to change log format/level/fields for the whole platform (structlog). |
 | [packaging.md](packaging.md) | Build the wheel, consume it as a library (extras matrix), and produce an offline/air-gapped install bundle. |
 | [integration-dishtayantra.md](integration-dishtayantra.md) | Integrating Phronexus into a DishtaYantra DAG as library components. |
+| [dishtayantra-vs-phronexus.md](dishtayantra-vs-phronexus.md) | Responsibilities by use case — the compute/orchestration DAG vs the governed data layer, and the overlap zones (orchestration, scheduling, transport) to resolve. |
 | [product-positioning.md](product-positioning.md) | *Internal strategy note* — positioning, the moat vs. commodity, and a moat/keep-thin/expose-native/cut scope table. |
 
 ## Quick links

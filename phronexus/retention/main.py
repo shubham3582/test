@@ -47,6 +47,8 @@ def main() -> None:  # pragma: no cover - process entrypoint
     poll = settings.scheduler.poll_seconds  # reuse a small poll cadence
     entities: list[str] = []
     source: KafkaEventSource | None = None
+    backoff = 1.0          # exponential backoff between failed sync attempts
+    pending = False        # is a polled-but-not-yet-landed batch already buffered?
     log.info("retention.start", warehouse=settings.iceberg.backend)
     try:
         while not stop.is_set():
@@ -60,11 +62,25 @@ def main() -> None:  # pragma: no cover - process entrypoint
                 source = KafkaEventSource(settings.kafka, entities) if entities else None
                 log.info("retention.subscribed", entities=entities)
             if source is not None:
-                worker.run(source, batch_size=settings.iceberg.batch_size, max_batches=1)
-                if hasattr(warehouse, "flush"):
-                    warehouse.flush()
-                # Commit offsets only after the batch is durably in Iceberg.
-                source.commit()
+                try:
+                    # Poll a fresh batch only if the last one already landed; on a
+                    # prior failure the rows stay buffered — just re-flush them.
+                    if not pending:
+                        worker.run(source, batch_size=settings.iceberg.batch_size, max_batches=1)
+                        pending = True
+                    if hasattr(warehouse, "flush"):
+                        warehouse.flush()
+                    # Commit offsets ONLY after the batch is durably in Iceberg.
+                    source.commit()
+                    pending, backoff = False, 1.0
+                except Exception as exc:  # noqa: BLE001 - transient Iceberg/S3/network failure
+                    # Don't crash and don't commit — the offset stays put and the
+                    # buffered batch is retried (idempotent by txn), so it lands as
+                    # soon as connectivity returns.
+                    log.warning("retention.sync_failed", error=str(exc), retry_in_s=round(backoff, 1))
+                    stop.wait(backoff)
+                    backoff = min(backoff * 2, 60.0)
+                    continue
             stop.wait(poll if not entities else 1.0)
     finally:
         if source is not None:

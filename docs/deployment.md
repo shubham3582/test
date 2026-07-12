@@ -393,6 +393,7 @@ otel_endpoint: http://otel-collector:4317
 | **Retention** to Iceberg | `python -m phronexus.retention.main` | always-on worker |
 | **Audit / trace** trail | `python -m phronexus.audit.main` | always-on worker (powers the Trace view) |
 | **Publish** a contract | `POST /contracts` or `phronexus publish-contract` | schema evolution |
+| **Durability preflight** | `phronexus doctor` (non-zero exit if loss possible) | deploy/CI gate; checks acks, DLQ, Aerospike SC/persistence/replication |
 
 Backfill is idempotent (writes are keyed by `doc_id` + generation CAS), so it's
 safe to re-run.

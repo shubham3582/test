@@ -50,6 +50,29 @@ def run(px: Phronexus, source, machine: StateMachine, *, batch_size: int = 100,
     return tally
 
 
+def serve(px, source, machine, stop, *, initial_backoff: float = 1.0,
+          max_backoff: float = 30.0, idle: float = 0.5) -> None:
+    """Resilient consume loop until ``stop`` is set.
+
+    A transient broker/store error backs off exponentially and retries instead of
+    crashing the process (offsets are only committed inside :func:`run` after a
+    batch is processed + relayed, so a mid-batch failure replays rather than
+    loses). Mirrors the retention worker's recovery.
+    """
+    backoff = initial_backoff
+    while not stop.is_set():
+        try:
+            tally = run(px, source, machine, max_batches=1)
+            backoff = initial_backoff  # progress -> reset backoff
+            if sum(tally.values()) == 0:
+                stop.wait(idle)  # idle backoff when no events
+        except Exception as exc:  # noqa: BLE001 - transient; retry with backoff
+            log.warning("statemachine.iteration_failed", error=str(exc),
+                        retry_in_s=round(backoff, 1))
+            stop.wait(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
+
 def main() -> None:  # pragma: no cover - process entrypoint
     settings = Settings()
     px = Phronexus(settings)
@@ -66,10 +89,7 @@ def main() -> None:  # pragma: no cover - process entrypoint
 
     log.info("statemachine.start", topics=sm_cfg.input_topics)
     try:
-        while not stop.is_set():
-            tally = run(px, source, machine, max_batches=1)
-            if sum(tally.values()) == 0:
-                stop.wait(0.5)  # idle backoff when no events
+        serve(px, source, machine, stop)
     finally:
         machine.drain_outbox()   # flush any pending outputs before exit
         source.close()           # commits Kafka offsets

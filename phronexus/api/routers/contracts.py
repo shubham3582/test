@@ -34,6 +34,14 @@ def refresh(px: Phronexus = Depends(get_px)) -> dict:
     return {"refreshed": True}
 
 
+@router.post("/contracts/{identity}/activate", response_model=ContractResponse)
+def activate(identity: str, px: Phronexus = Depends(get_px)):
+    """Make an already-published version active (rollback/forward). Flips the
+    active pointer only — no body change, no compatibility gate."""
+    px.activate_contract(identity)
+    return ContractResponse(published=identity, activated=True)
+
+
 @router.get("/contracts")
 def list_contracts(px: Phronexus = Depends(get_px)) -> dict:
     """List contracts persisted in the store (the source of truth)."""

@@ -27,10 +27,12 @@ from phronexus.contracts.models import (
     ValidationContract,
     ViewContract,
 )
-from phronexus.errors import ContractNotFound, ContractValidationError
+from phronexus.errors import ContractNotFound, ContractValidationError, GenerationConflict
 from phronexus.kv.base import KVStore
 
 log = structlog.get_logger(__name__)
+
+_PUBLISH_RETRIES = 5  # optimistic-concurrency retries for competing publishers
 
 
 def _active_key(kind: str, entity: str, view: Optional[str] = None) -> str:
@@ -61,23 +63,83 @@ class ContractRegistry:
     # --- publishing -----------------------------------------------------
 
     def publish(self, contract: Contract, *, activate: bool = True, force: bool = False) -> None:
-        # Compatibility gate: reject a storage change that would break addressing
-        # of existing documents (PK, manifest set, canonical projection). Pass
-        # force=True to override intentionally.
-        if isinstance(contract, StorageContract) and not force:
-            self._check_storage_compatible(contract)
         identity = contract.identity()
-        payload = {"kind": contract.kind.value, "doc": contract.model_dump(mode="json")}
-        self._store.put(self._set, identity, payload)
-        if activate:
-            view = getattr(contract, "view", None)
-            self._store.put(
-                self._set,
-                _active_key(contract.kind.value, contract.entity, view),
-                {"target": identity, "version": contract.version},
-            )
+        view = getattr(contract, "view", None)
+        akey = _active_key(contract.kind.value, contract.entity, view)
+        body = {"kind": contract.kind.value, "doc": contract.model_dump(mode="json")}
+
+        # Concurrent publishers on the same entity must be serializable: the body
+        # and the active-pointer flip commit atomically (one transaction), both
+        # generation-guarded. On a CAS conflict we refresh and retry, so the
+        # compatibility gate is re-evaluated against the latest active version
+        # (closing the check-then-act TOCTOU) rather than a stale snapshot.
+        for attempt in range(_PUBLISH_RETRIES + 1):
+            # Compatibility gate: reject a storage change that would break
+            # addressing of existing documents (PK, manifest set, canonical
+            # projection). force=True overrides intentionally.
+            if isinstance(contract, StorageContract) and not force:
+                self._check_storage_compatible(contract)
+            try:
+                with self._store.transaction() as txn:
+                    existing = self._store.get(self._set, identity)
+                    if existing is not None and not force:
+                        # Same identity already published: idempotent if the body
+                        # is byte-identical, a hard error if it diverges (never a
+                        # silent overwrite of a different contract at this version).
+                        if existing.bins.get("doc") != body["doc"]:
+                            raise ContractValidationError(
+                                f"{identity} already published with different content; "
+                                f"publish a new version or use force=True to overwrite"
+                            )
+                    else:
+                        self._store.put(
+                            self._set, identity, body,
+                            expected_generation=(existing.generation if existing else 0),
+                            txn=txn,
+                        )
+                    if activate:
+                        ptr = self._store.get(self._set, akey)
+                        self._store.put(
+                            self._set, akey,
+                            {"target": identity, "version": contract.version},
+                            expected_generation=(ptr.generation if ptr else 0),
+                            txn=txn,
+                        )
+                break
+            except GenerationConflict:
+                if attempt >= _PUBLISH_RETRIES:
+                    raise
+                self.refresh(force=True)  # re-read latest state, then retry
         log.info("contract.published", identity=identity, activated=activate)
         self.refresh(force=True)
+
+    def activate(self, identity: str) -> Contract:
+        """Flip the active pointer to an already-stored version (rollback/forward).
+
+        Unlike :meth:`publish`, this writes no contract body and runs no
+        compatibility gate — the version was validated when first published, so
+        pointing back to it is always safe. Raises ``ContractNotFound`` if the
+        version isn't in the store.
+        """
+        c = self.get_version(identity)
+        view = getattr(c, "view", None)
+        akey = _active_key(c.kind.value, c.entity, view)
+        # Generation-guard the pointer flip so a concurrent activate/publish can't
+        # silently lose it (last-writer-wins on the earlier version).
+        for attempt in range(_PUBLISH_RETRIES + 1):
+            try:
+                ptr = self._store.get(self._set, akey)
+                self._store.put(
+                    self._set, akey, {"target": identity, "version": c.version},
+                    expected_generation=(ptr.generation if ptr else 0),
+                )
+                break
+            except GenerationConflict:
+                if attempt >= _PUBLISH_RETRIES:
+                    raise
+        log.info("contract.activated", identity=identity)
+        self.refresh(force=True)
+        return c
 
     def _check_storage_compatible(self, new: StorageContract) -> None:
         """Reject an evolution that would strand existing documents."""

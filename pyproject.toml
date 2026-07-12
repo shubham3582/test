@@ -47,6 +47,8 @@ dev = [
     "ruff>=0.4",
     "fastapi>=0.110",
     "httpx>=0.27",
+    "hypothesis>=6.100",
+    "freezegun>=1.5",
 ]
 
 [tool.setuptools.packages.find]
@@ -58,6 +60,9 @@ include = ["phronexus*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "chaos: deterministic fault-injection / crash-consistency tests (Stage-1 guarantees)",
+]
 
 [tool.ruff]
 line-length = 100

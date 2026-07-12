@@ -80,6 +80,8 @@ class ManifestManager:
         changefeed_set: str = "_cf_outbox",
         inline_changefeed: bool = True,
         write_max_retries: int = 3,
+        verify_commit: bool = False,
+        orphan_grace_seconds: int = 300,
     ):
         self._store = store
         self._registry = registry
@@ -91,6 +93,11 @@ class ManifestManager:
         self._changefeed_set = changefeed_set
         self._inline_changefeed = inline_changefeed
         self._write_max_retries = write_max_retries
+        # Verify a doc committed before relaying its event (guards against phantom
+        # events from a non-transactional crash); reap orphan outbox rows past the
+        # grace period. A no-op cost path when verify_commit is False (native txn).
+        self._verify_commit = verify_commit
+        self._orphan_grace_seconds = orphan_grace_seconds
         self._proj = ProjectionEngine()
 
     # --- write ----------------------------------------------------------
@@ -133,12 +140,19 @@ class ManifestManager:
             self.drain_changefeed()
         return ids
 
-    def stage_write(self, entity: str, document: dict[str, Any], txn) -> "StagedWrite":
+    def stage_write(self, entity: str, document: dict[str, Any], txn,
+                    stage_extra=None) -> "StagedWrite":
         """Stage projections + manifest into ``txn`` without committing.
 
         Exposed so a caller (e.g. the state-machine processor) can compose a
         document write with additional records — outbox events, dedup markers —
         in a single atomic transaction. Call :meth:`post_write` after commit.
+
+        ``stage_extra(txn)`` is invoked just before the manifest put, so a caller
+        can stage its own records (e.g. state-machine output events) *before* the
+        commit point — this keeps the manifest genuinely the last write, so on a
+        non-transactional (CE) crash a committed document always implies its
+        outputs are already durable (they are never lost).
         """
         # Validate at the write boundary — covers put(), the state machine, and
         # backfill uniformly. Errors abort the (surrounding) transaction.
@@ -159,9 +173,11 @@ class ManifestManager:
             raise DocumentAlreadyExists(f"{entity}/{doc_id} already exists")
 
         old_data = self._read_canonical_data(existing, sc)
-        records = self._proj.build(sc, document, doc_id=doc_id, txn_id=txn_id)
-        canonical = next(r for r in records if r.projection.canonical)
         ts = time.time()
+        # Stamp the same write time into every projection envelope (_ts) and the
+        # manifest, so the reaper can tell a young in-flight write from an orphan.
+        records = self._proj.build(sc, document, doc_id=doc_id, txn_id=txn_id, ts=ts)
+        canonical = next(r for r in records if r.projection.canonical)
 
         manifest_bins = {
             M_STATUS: STATUS_COMMITTED,
@@ -194,6 +210,10 @@ class ManifestManager:
         # Wrap in one 'ev' bin — Aerospike bin names are capped at 15 chars, and
         # the event has a "contract_version" field; map keys have no such limit.
         self._store.put(self._changefeed_set, f"{doc_id}:{txn_id}", {"ev": event.to_dict()}, txn=txn)
+        # Caller-supplied records (e.g. state-machine output events) go here, still
+        # BEFORE the manifest, so a committed manifest implies they are durable.
+        if stage_extra is not None:
+            stage_extra(txn)
         # Manifest LAST — the commit point.
         self._store.put(
             sc.manifest_set, doc_id, manifest_bins, expected_generation=expected_gen, txn=txn
@@ -215,12 +235,32 @@ class ManifestManager:
             self.drain_changefeed()
         log.info("document.committed", entity=staged.entity, doc_id=staged.doc_id, txn=staged.txn_id)
 
-    def drain_changefeed(self, max_events: int = 1000) -> int:
-        """Relay durably-staged change-feed events to the sink. Idempotent-safe."""
+    def drain_changefeed(self, max_events: int = 1000, *, now: Optional[float] = None) -> int:
+        """Relay durably-staged change-feed events to the sink. Idempotent-safe.
+
+        When ``verify_commit`` is on, an event whose document did not actually
+        commit (a phantom from a non-transactional crash) is not relayed; once it
+        is older than the grace period it is reaped from the outbox. ``now`` is
+        injectable for deterministic tests.
+        """
+        now = time.time() if now is None else now
         published = 0
-        for key, rec in list(self._store.scan(self._changefeed_set)):
+        # Relay in per-document version order so a downstream consumer keyed by
+        # doc_id sees a document's versions monotonically (the scan itself is
+        # unordered). Cross-document order is irrelevant — retention reconciles.
+        rows = [(key, CommitEvent(**rec.bins["ev"]))
+                for key, rec in self._store.scan(self._changefeed_set)]
+        rows.sort(key=lambda ke: (ke[1].doc_id, ke[1].version))
+        for key, event in rows:
+            if self._verify_commit and not self._write_committed(event):
+                # Not (yet) committed: leave it in case it commits shortly, but
+                # reap it once it is clearly an orphan (older than the grace).
+                if (now - (event.ts or 0.0)) >= self._orphan_grace_seconds:
+                    self._store.remove(self._changefeed_set, key)
+                    log.info("changefeed.reaped_orphan", key=key)
+                continue
             try:
-                self._sink.emit(CommitEvent(**rec.bins["ev"]))
+                self._sink.emit(event)
             except Exception:  # noqa: BLE001 - leave for retry
                 log.warning("changefeed.emit_failed", key=key)
                 continue
@@ -229,6 +269,18 @@ class ManifestManager:
             if published >= max_events:
                 break
         return published
+
+    def _write_committed(self, event: CommitEvent) -> bool:
+        """Did ``event``'s write actually commit? True if a manifest for the doc
+        reflects this txn as its current or immediately-previous write."""
+        try:
+            sc = self._registry.active_storage(event.entity)
+        except ContractNotFound:
+            return True  # can't check -> don't suppress (fail open)
+        m = self._store.get(sc.manifest_set, event.doc_id)
+        if m is None:
+            return False
+        return event.txn_id in (m.bins.get(M_TXN), m.bins.get(M_PREV_TXN))
 
     # --- read -----------------------------------------------------------
 
@@ -320,12 +372,30 @@ class ManifestManager:
                         self._stage_deindex(entity, doc_id, old_data, txn)
                     self._store.put(self._changefeed_set, f"{doc_id}:{del_txn_id}",
                                     {"ev": del_event.to_dict()}, txn=txn)
-            else:  # hard delete: remove projections then manifest
+            else:  # hard delete: remove the document DATA, keep a delete tombstone
+                # The projection records (the document bytes) are physically
+                # removed, but a minimal manifest tombstone remains so that:
+                #   - versions stay MONOTONIC across delete -> re-insert (a lower-
+                #     versioned tombstone must never shadow a later re-insert in the
+                #     retention view), and
+                #   - the change feed keeps a delete marker and a re-delete is a
+                #     clean DocumentNotFound.
+                tomb = {
+                    M_STATUS: STATUS_DELETED,
+                    M_TXN: del_txn_id,
+                    M_CVER: sc.version,
+                    M_DOC_ID: doc_id,
+                    M_CANONICAL: manifest.bins.get(M_CANONICAL),
+                    M_PROJECTIONS: [],  # data is gone; nothing to reference/reap
+                    M_TS: time.time(),
+                    M_PREV_TXN: manifest.bins.get(M_TXN),
+                }
                 with self._store.transaction(native=sc.native_txn) as txn:
                     for p in manifest.bins.get(M_PROJECTIONS, []):
                         self._store.remove(p["set"], p["key"], txn=txn)
-                    self._store.remove(
-                        sc.manifest_set, doc_id, expected_generation=expected_gen, txn=txn
+                    self._store.put(
+                        sc.manifest_set, doc_id, tomb,
+                        expected_generation=expected_gen, txn=txn,
                     )
                     if self._index_in_txn:
                         self._stage_deindex(entity, doc_id, old_data, txn)

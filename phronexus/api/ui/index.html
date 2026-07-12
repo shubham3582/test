@@ -57,6 +57,25 @@
   .list .g { padding:8px 12px; background:var(--panel2); font-size:11px; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); }
   .list .item { padding:8px 12px; border-top:1px solid var(--line); font-family:var(--mono); font-size:12px; cursor:pointer; }
   .list .item:hover { background:var(--panel2); }
+  /* contract version list */
+  .ksection { margin-bottom:20px; }
+  .khead { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.6px; color:var(--accent); padding:0 2px 8px; border-bottom:2px solid var(--line); margin-bottom:10px; }
+  .khead .kcount { font-weight:600; letter-spacing:0; color:var(--muted); background:var(--panel2);
+    border-radius:999px; padding:1px 8px; font-size:11px; }
+  .cgroup { border:1px solid var(--line); border-radius:10px; overflow:hidden; margin-bottom:12px; }
+  .cgroup .ghead { padding:8px 12px; background:var(--panel2); font-size:12px; color:var(--fg);
+    display:flex; align-items:center; gap:8px; border-bottom:1px solid var(--line); }
+  .vrow { display:flex; align-items:center; gap:10px; padding:8px 12px; border-top:1px solid var(--line);
+    cursor:pointer; font-size:12px; }
+  .cgroup .ghead + .vrow { border-top:none; }
+  .vrow:hover { background:var(--panel2); }
+  .vrow.active { background:color-mix(in srgb, var(--ok) 8%, transparent); }
+  .vrow .dot { width:8px; height:8px; border-radius:999px; background:var(--line); flex:none; }
+  .vrow .dot.on { background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 20%, transparent); }
+  .vrow .vlabel { font-family:var(--mono); color:var(--fg); }
+  .vrow .spacer { flex:1; }
+  button.mini { padding:3px 10px; font-size:11px; border-radius:6px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; }
   .result { margin-top:12px; padding:12px; border-radius:8px; font-family:var(--mono); font-size:12px; white-space:pre-wrap;
     background:var(--panel2); border:1px solid var(--line); max-height:320px; overflow:auto; }
@@ -206,16 +225,68 @@ async function showApp() {
 // ---- Contracts ----
 async function renderContracts() {
   const m = document.getElementById('main');
-  m.innerHTML = `<h2>Contracts</h2><div class="sub">Aerospike is the source of truth. Validate before saving.</div>
+  m.innerHTML = `<h2>Contracts</h2><div class="sub">Aerospike is the source of truth. ● marks the active version — the one new writes use; older versions stay readable for documents written under them.</div>
     <div class="cols"><div id="clist"></div><div id="ceditor"></div></div>`;
   try { S.contracts = await api('/contracts'); } catch(e){ S.contracts={contracts:[],active:{}}; }
-  const byKind = {}; (S.contracts.contracts||[]).forEach(id=>{ const k=id.split(':')[0]; (byKind[k]=byKind[k]||[]).push(id); });
-  let html='<div class="list">';
-  KINDS.forEach(k=>{ if(!byKind[k]) return; html+='<div class="g">'+k+'</div>';
-    byKind[k].forEach(id=> html+='<div class="item" onclick="loadContract(\''+id+'\')">'+id+'</div>'); });
-  html+='</div>';
-  document.getElementById('clist').innerHTML = html || '<div class="muted">No contracts yet.</div>';
+  document.getElementById('clist').innerHTML = contractListHtml();
   editorPanel(null);
+}
+
+// "storage:trade:v3" -> {kind, subject:"trade", version:3, group:"storage:trade"}
+// "view:trade:default:v1" -> {kind:"view", subject:"trade:default", version:1, ...}
+function parseIdentity(id){
+  const p = id.split(':');
+  const kind = p[0];
+  const version = parseInt((p[p.length-1]||'').replace(/^v/,''), 10) || 0;
+  const subject = p.slice(1, p.length-1).join(':');
+  return { kind, subject, version, group: kind+':'+subject };
+}
+
+function contractListHtml(){
+  const active = S.contracts.active || {};
+  // group[kind][subject] = [{id, version}]
+  const byKind = {};
+  (S.contracts.contracts||[]).forEach(id=>{
+    const info = parseIdentity(id);
+    ((byKind[info.kind] = byKind[info.kind] || {})[info.subject] =
+      byKind[info.kind][info.subject] || []).push({ id, version: info.version });
+  });
+  if(!Object.keys(byKind).length) return '<div class="muted">No contracts yet.</div>';
+  // known kinds first (KINDS order), then any others alphabetically
+  const kinds = KINDS.filter(k=>byKind[k]).concat(
+    Object.keys(byKind).filter(k=>!KINDS.includes(k)).sort());
+  let html='';
+  kinds.forEach(kind=>{
+    const subjects = Object.keys(byKind[kind]).sort();
+    html += '<div class="ksection"><div class="khead">'+kind
+          + '<span class="kcount">'+subjects.length+'</span></div>';
+    subjects.forEach(subject=>{
+      const versions = byKind[kind][subject].sort((a,b)=> b.version - a.version); // newest first
+      const activeId = active['active:'+kind+':'+subject];
+      html += '<div class="cgroup"><div class="ghead"><b>'+escapeHtml(subject)+'</b>'
+            + (versions.length>1 ? '<span class="pill">'+versions.length+' versions</span>' : '')
+            + '</div>';
+      versions.forEach(v=>{
+        const on = v.id===activeId;
+        html += '<div class="vrow'+(on?' active':'')+'" onclick="loadContract(\''+v.id+'\')">'
+              + '<span class="dot'+(on?' on':'')+'"></span>'
+              + '<span class="vlabel">v'+v.version+'</span><span class="spacer"></span>'
+              + (on ? '<span class="badge ok">ACTIVE</span>'
+                    : '<button class="mini" onclick="event.stopPropagation();activateContract(\''+v.id+'\')">Activate</button>')
+              + '</div>';
+      });
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  return html;
+}
+
+async function activateContract(id){
+  if(!confirm('Make '+id+' the active version? New writes and pointer-less reads will use it.')) return;
+  try { await api('/contracts/'+encodeURIComponent(id)+'/activate', {method:'POST'});
+        renderContracts(); }
+  catch(e){ alert('Activate failed: '+(e.body?.detail||e.message)); }
 }
 
 function editorPanel(doc) {

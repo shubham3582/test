@@ -109,19 +109,31 @@ class Phronexus:
         if acfg.enabled and not self.settings.kafka.enabled:
             self.sink = AuditingSink(self.sink, AuditWorker(self.audit, self.registry))
         self.validator = Validator(self.registry)
+        # Without native multi-record transactions (Aerospike CE) a crash can
+        # leave a change event for a doc that never committed — verify commit
+        # before relaying so no phantom event escapes.
+        verify_commit = (
+            self.settings.changefeed.verify_commit
+            or not self.settings.aerospike.use_native_txn
+        )
         self.manifest = ManifestManager(
             self.store, self.registry, self.index, self.sink, self.telemetry,
             validator=self.validator, index_in_txn=self.settings.index.in_txn,
             changefeed_set=self.settings.aerospike.changefeed_outbox_set,
             inline_changefeed=self.settings.changefeed.inline_relay,
             write_max_retries=self.settings.aerospike.write_max_retries,
+            verify_commit=verify_commit,
+            orphan_grace_seconds=self.settings.reaper.orphan_grace_seconds,
         )
         # Wire store lookups now that the manifest/index exist (enables the
         # unique / references DQ checks).
         self.validator.set_lookup(_Lookup(self))
         self.query_engine = QueryEngine(self.registry, self.index, _ManifestReader(self.manifest))
         self.view_engine = ViewEngine(self.registry)
-        self.reaper = Reaper(self.store, self.registry)
+        self.reaper = Reaper(
+            self.store, self.registry,
+            grace_seconds=self.settings.reaper.orphan_grace_seconds,
+        )
         log.info("phronexus.ready", backend=self.settings.backend)
 
     # --- contract admin -------------------------------------------------
@@ -138,6 +150,14 @@ class Phronexus:
     def load_contract_dir(self, path: str, *, activate: bool = True) -> None:
         for c in load_dir(path):
             self.registry.publish(c, activate=activate)
+
+    def activate_contract(self, identity: str) -> None:
+        """Make an already-published version the active one (rollback/forward).
+
+        Flips the active pointer only; the version's body is untouched and no
+        compatibility gate runs (it passed when first published).
+        """
+        self.registry.activate(identity)
 
     def refresh_contracts(self) -> None:
         self.registry.refresh(force=True)
@@ -266,6 +286,15 @@ class Phronexus:
         return NativeAerospike(self)
 
     # --- lifecycle ------------------------------------------------------
+
+    def durability_report(self) -> dict[str, Any]:
+        """Preflight the no-loss posture of this deployment (producer acks, DLQ,
+        Aerospike SC/persistence/replication, commit-after-process). Confirms the
+        *configuration* supports no message loss; see
+        :mod:`phronexus.observability.durability`."""
+        from phronexus.observability.durability import durability_report
+
+        return durability_report(self)
 
     def close(self) -> None:
         self.registry.close()

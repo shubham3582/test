@@ -86,6 +86,58 @@ transitions:
      emit: [{topic: "kafka://ccr.display",        type: DisplayUpdate}]}
 ```
 
+### Delivery & offset commits — why replay is safe
+
+The store-side guarantee above (dedup + generation-CAS in one transaction) is one
+half; the Kafka side is the other. Every consumer in the pipeline (the state-machine
+runner, and the retention/audit workers) is **manual-commit**:
+
+- `enable.auto.commit: false`, `auto.offset.reset: earliest`.
+- The offset is committed **synchronously, only *after* the event is durably
+  handled** — for the saga: state persisted **and** the outbox relayed to Kafka;
+  for retention: rows flushed to Iceberg. Never before.
+
+That ordering is deliberately **at-least-once** (it closes the loss window — an
+offset is never committed for work that isn't durable). A crash, rebalance, or
+redelivery between "handled" and "committed" simply **replays the batch** — and
+replay is safe because processing is idempotent: the state machine dedups by
+`event_id` (a replayed `TradeReceived` returns `duplicate`, no second cube request)
+and retention appends are idempotent by `txn_id`. **At-least-once delivery +
+idempotent processing = effectively-once end to end.**
+
+### Durability & delivery guarantees ("will we lose a message?")
+
+**No message durably accepted into the pipeline is lost** — at-least-once,
+effectively-once end to end — **provided the infrastructure is configured for
+durability.** There is no cross-system two-phase commit; the guarantee is
+*engineered* from the transactional outbox + `event_id` dedup + commit-after-process
+ordering, so it holds exactly as far as these four links:
+
+| Link | Requirement | If not |
+|---|---|---|
+| Producer → Kafka | `acks=all`, retries on | a message can be lost at the broker *before* Phronexus ever sees it |
+| Kafka / MSK | replication ≥ 2, `min.insync.replicas` ≥ 2, no unclean leader election, retention **>** worst consumer lag | committed messages lost on failover, or aged out if a consumer lags past retention |
+| Aerospike | Enterprise + **strong-consistency (SC)** namespace, persistent storage, replication | a *memory* namespace (the dev stack) loses everything on restart; a non-SC namespace can drop an acked write on failover |
+| Rejects | a `dlq_topic` (`statemachine.dlq_topic`) | a rejected/poison message is acked and **dropped** (by design — but gone) |
+
+> ⚠️ The dev/test stack uses `storage-engine memory` and often no DLQ, so it does
+> **not** give you no-loss. Production config does — see [deployment.md](deployment.md#aerospike)
+> (Aerospike SC) and [Amazon MSK](deployment.md#amazon-msk).
+
+**Check it, don't assume it.** `phronexus doctor` (or `px.durability_report()`)
+inspects the live config — producer `acks`/idempotence, DLQ, and the Aerospike
+namespace's `strong-consistency` / `storage-engine` / `replication-factor` — and
+reports `pass`/`warn`/`fail` per link, exiting **non-zero if the config can lose
+messages** (so a deploy/CI gate can block it). It confirms the *configuration
+posture*; it can't see third-party producers on your input topics or broker-side
+`min.insync.replicas` — those it lists as "not auto-verified."
+
+**Say it precisely:** *at-least-once, effectively-once end to end — no message
+durably accepted is lost, given durable producers, a replicated Kafka/MSK topic
+with adequate retention, and Aerospike Enterprise + SC. We may reprocess on failure
+(safe, because processing is idempotent), but we don't drop committed messages.*
+"Never lose a message" is true only with all four links in place; it is not magic.
+
 > **Enriching a reply with custom code.** When a service reply needs
 > post-processing before the next request (call a pricing library, look up
 > reference data), attach an `on_transition` hook — it runs inside the same

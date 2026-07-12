@@ -58,6 +58,7 @@ px = Phronexus(Settings())          # backend/kafka/iceberg from env or ./config
 | `scheduler(output=None) -> Scheduler` | distributed exactly-once scheduler |
 | `request_journal()` · `message_journal()` | msgpack journals — `.read(id)` for request/response or raw messages |
 | `native_aerospike()` | supported native-Aerospike accessor (managed-set guard) |
+| `durability_report()` | preflight the no-loss posture (producer acks · DLQ · Aerospike SC/persistence/replication). Also the `phronexus doctor` CLI (non-zero exit if the config can lose messages). |
 | `close()` | release connections |
 
 ---

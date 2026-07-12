@@ -49,7 +49,13 @@ def _augment(cfg: KafkaSettings, conf: dict[str, Any]) -> dict[str, Any]:
 def make_producer(cfg: KafkaSettings):  # pragma: no cover - needs a broker
     from confluent_kafka import Producer
 
-    return Producer(_augment(cfg, cfg.client_config()))
+    conf = cfg.client_config()
+    # Durability defaults (a config-passthrough value still wins via setdefault):
+    #   acks=all           — a write is acked only after all in-sync replicas have it
+    #   enable.idempotence — no duplicates on producer retry (safe with acks=all)
+    conf.setdefault("acks", "all")
+    conf.setdefault("enable.idempotence", True)
+    return Producer(_augment(cfg, conf))
 
 
 def make_consumer(cfg: KafkaSettings, extra: Optional[dict[str, Any]] = None):  # pragma: no cover

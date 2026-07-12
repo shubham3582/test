@@ -46,6 +46,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: phx-api
+    restart: unless-stopped
     depends_on:
       aerospike: {condition: service_healthy}
       redpanda: {condition: service_healthy}
@@ -88,6 +89,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: phx-audit
+    restart: unless-stopped
     depends_on:
       phronexus-api: {condition: service_healthy}
       redpanda: {condition: service_healthy}
@@ -109,6 +111,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: phx-runner
+    restart: unless-stopped
     profiles: ["workers"]
     depends_on:
       phronexus-api: {condition: service_healthy}
@@ -131,6 +134,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     profiles: ["workers"]
+    restart: unless-stopped
     depends_on:
       phronexus-api: {condition: service_healthy}
     environment:
@@ -206,6 +210,7 @@ services:
       context: ..
       dockerfile: Dockerfile
     container_name: phx-retention
+    restart: unless-stopped
     profiles: ["iceberg"]
     depends_on:
       phronexus-api: {condition: service_healthy}

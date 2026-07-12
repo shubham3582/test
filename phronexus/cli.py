@@ -67,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("entity")
     p.add_argument("--dry-run", action="store_true")
 
+    sub.add_parser("doctor", help="check the durability / no-loss posture of this deployment")
+
     p = sub.add_parser("reap", help="sweep orphan projections")
     p.add_argument("entities", nargs="+")
 
@@ -103,6 +105,17 @@ def main(argv: list[str] | None = None) -> int:
             _print({"backfilled": n, "dry_run": args.dry_run})
         elif args.cmd == "reap":
             _print({"removed": px.reaper.sweep(args.entities)})
+        elif args.cmd == "doctor":
+            rep = px.durability_report()
+            mark = {"pass": "✓", "warn": "!", "fail": "✗", "unknown": "?"}
+            print(f"durability: {rep['summary']}  (no_loss={rep['no_loss']})")
+            for c in rep["checks"]:
+                print(f"  {mark.get(c['status'], '?')} {c['link']:32} {c['detail']}")
+            if rep.get("unverifiable"):
+                print("  not auto-verified:")
+                for u in rep["unverifiable"]:
+                    print(f"    - {u}")
+            return 0 if rep["no_loss"] else 1   # non-zero so CI/deploy gates can fail
         return 0
     finally:
         px.close()

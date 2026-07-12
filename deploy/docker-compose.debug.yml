@@ -1,0 +1,19 @@
+# Debug overlay — verbose, human-readable (console) logs + fast contract refresh.
+#   docker compose -f docker-compose.yml -f docker-compose.debug.yml \
+#     --profile workers --profile iceberg up -d --build
+x-debug-env: &debug-env
+  PHRONEXUS_OBSERVABILITY__LOG_LEVEL: DEBUG
+  PHRONEXUS_OBSERVABILITY__LOG_JSON: "false"     # console renderer, easier to read
+  PHRONEXUS_CONTRACTS__REFRESH_SECONDS: "5"
+
+services:
+  phronexus-api:
+    environment: *debug-env
+  phronexus-audit:
+    environment: *debug-env
+  phronexus-retention:
+    environment: *debug-env
+  phronexus-runner:
+    environment: *debug-env
+  phronexus-scheduler:
+    environment: *debug-env

@@ -108,6 +108,16 @@ class KVStore(abc.ABC):
         ignore it; the in-memory backend is always atomic.
         """
 
+    def supports_atomic_txn(self) -> bool:
+        """Whether :meth:`transaction` is genuinely all-or-nothing.
+
+        The manifest write and the state-machine saga rely on this for
+        crash-atomicity / exactly-once. The in-memory backend is always atomic;
+        Aerospike is atomic only with native multi-record transactions enabled
+        and supported by the client (see the override). Defaults to True.
+        """
+        return True
+
     def native_client(self) -> Any:
         """Return the backend's native client handle, if it has one.
 

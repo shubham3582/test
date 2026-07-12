@@ -68,8 +68,14 @@ def test_hard_delete_removes_records(px):
     fx = {"deal_id": "FX-1", "pair": "EURUSD", "notional": 1e6, "rate": 1.08, "trade_date": 20250115}
     px.put("fx_spot", fx)
     assert px.delete("fx_spot", "FX-1") is True
-    assert px.store.get("fx_manifest", "FX-1") is None
+    # The document DATA is physically gone ...
     assert px.store.get("fx_main", "FX-1") is None
+    assert px.get("fx_spot", "FX-1") is None
+    # ... but a minimal manifest tombstone remains (delete marker) so versions
+    # stay monotonic across a re-insert and the change feed keeps a delete row.
+    tomb = px.store.get("fx_manifest", "FX-1")
+    assert tomb is not None and tomb.bins["status"] == "deleted"
+    assert tomb.bins["projections"] == []
 
 
 def test_delete_missing_raises(px):
