@@ -33,6 +33,7 @@ class LoginResponse(BaseModel):
     expires_in: int
     principal: str
     roles: list[str]
+    permissions: list[str]
 
 
 @router.get("/auth/config")
@@ -51,14 +52,21 @@ def login(body: LoginRequest, request: Request) -> LoginResponse:
         raise _unauthorized("invalid username or password")
     exp = int(time.time()) + cfg.jwt_ttl_seconds
     token = jwt.encode({"sub": body.username, "roles": roles, "exp": exp}, cfg.jwt_secret)
+    perms = sorted(request.app.state.authenticator.permissions_for_roles(roles))
     return LoginResponse(
-        token=token, expires_in=cfg.jwt_ttl_seconds, principal=body.username, roles=roles
+        token=token, expires_in=cfg.jwt_ttl_seconds, principal=body.username,
+        roles=roles, permissions=perms,
     )
 
 
 @router.get("/auth/me")
-def me(principal: Principal = Depends(require_principal)) -> dict:
-    return {"principal": principal.name, "scheme": principal.scheme, "roles": list(principal.roles)}
+def me(request: Request, principal: Principal = Depends(require_principal)) -> dict:
+    authn = request.app.state.authenticator
+    return {
+        "principal": principal.name, "scheme": principal.scheme,
+        "roles": list(principal.roles),
+        "permissions": sorted(authn.permissions(principal)),
+    }
 
 
 # --- OIDC (Microsoft Entra / Azure AD) authorization-code + PKCE ---------

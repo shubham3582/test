@@ -156,7 +156,9 @@
 </div>
 
 <script>
-const S = { token:null, user:null, roles:[], view:'contracts', contracts:{contracts:[],active:{}}, current:null, saveOk:false };
+const S = { token:null, user:null, roles:[], permissions:[], view:'contracts', contracts:{contracts:[],active:{}}, current:null, saveOk:false };
+function hasPermission(p){ const P=S.permissions||[];
+  return P.includes('*') || P.includes(p) || P.includes(p.split(':')[0]+':*'); }
 
 // ---- theme (light default; persisted) ----
 function applyTheme(t){
@@ -166,7 +168,9 @@ function applyTheme(t){
 }
 function toggleTheme(){ applyTheme((document.documentElement.getAttribute('data-theme')==='dark') ? 'light' : 'dark'); }
 (function(){ let t='light'; try{ t=localStorage.getItem('phx-theme')||'light'; }catch(e){} applyTheme(t); })();
-const VIEWS = [['contracts','Contracts'],['validate','Document Validator'],['sm','State Machine'],['data','Data Browser'],['trace','Trace']];
+const VIEWS = [['contracts','Contracts'],['validate','Document Validator'],['sm','State Machine'],['data','Data Browser'],['trace','Trace'],
+  ['changes','Change Requests','governance:read'],['fleet','Fleet','governance:read'],['history','History','governance:read'],
+  ['backfill','Backfill','governance:read'],['promotion','Promotion','contract:promote'],['evidence','Evidence','evidence:export']];
 const KINDS = ['storage','query','view','validation','transition','stream'];
 
 const TEMPLATES = {
@@ -204,8 +208,8 @@ async function doLogin() {
   try {
     const r = await api('/auth/login', {method:'POST', body:JSON.stringify({
       username:document.getElementById('u').value, password:document.getElementById('p').value })});
-    S.token=r.token; S.user=r.principal; S.roles=r.roles;
-    sessionStorage.setItem('phx', JSON.stringify({token:r.token, user:r.principal, roles:r.roles}));
+    S.token=r.token; S.user=r.principal; S.roles=r.roles; S.permissions=r.permissions||[];
+    sessionStorage.setItem('phx', JSON.stringify({token:r.token, user:r.principal, roles:r.roles, permissions:S.permissions}));
     showApp();
   } catch(e){ el.textContent = e.body?.detail || 'Sign-in failed'; }
 }
@@ -217,9 +221,13 @@ async function showApp() {
   document.getElementById('app').style.display='grid';
   document.getElementById('whoName').innerHTML = '<b>'+S.user+'</b><br><span class="muted">'+(S.roles.join(', ')||'user')+'</span>';
   const nav = document.getElementById('nav'); nav.innerHTML='';
-  VIEWS.forEach(([id,label])=>{ const b=document.createElement('button'); b.textContent=label;
+  const visible = VIEWS.filter(([id,label,perm])=>!perm || hasPermission(perm));
+  if(!visible.some(([id])=>id===S.view)) S.view = visible[0][0];
+  visible.forEach(([id,label])=>{ const b=document.createElement('button'); b.textContent=label;
     b.className = S.view===id?'active':''; b.onclick=()=>{ S.view=id; showApp(); }; nav.appendChild(b); });
-  ({contracts:renderContracts, validate:renderValidate, sm:renderSM, data:renderData, trace:renderTrace}[S.view])();
+  ({contracts:renderContracts, validate:renderValidate, sm:renderSM, data:renderData, trace:renderTrace,
+    changes:renderChanges, fleet:renderFleet, history:renderHistory, backfill:renderBackfill,
+    promotion:renderPromotion, evidence:renderEvidence}[S.view])();
 }
 
 // ---- Contracts ----
@@ -283,6 +291,16 @@ function contractListHtml(){
 }
 
 async function activateContract(id){
+  // Prefer the governed, audited rollback path when permitted; fall back to the
+  // direct admin activate.
+  if(hasPermission('contract:rollback')){
+    const reason = prompt('Roll the active pointer to '+id+'? Enter a reason (recorded in the governance log):');
+    if(reason===null) return;
+    try { await api('/governance/rollback', {method:'POST', body:JSON.stringify({identity:id, reason})});
+          renderContracts(); }
+    catch(e){ alert('Rollback failed: '+(e.body?.detail||e.message)); }
+    return;
+  }
   if(!confirm('Make '+id+' the active version? New writes and pointer-less reads will use it.')) return;
   try { await api('/contracts/'+encodeURIComponent(id)+'/activate', {method:'POST'});
         renderContracts(); }
@@ -539,6 +557,160 @@ async function loadTrace(){
   }catch(e){ out.innerHTML=res(false,[e.body?.detail||e.message]); }
 }
 
+// ---- Governance: Change Requests ----
+const CH_BADGE = {draft:'pill', submitted:'badge warn', approved:'badge ok', published:'badge ok', rejected:'badge err', withdrawn:'pill'};
+async function renderChanges(){
+  document.getElementById('main').innerHTML = `<h2>Change Requests</h2>
+    <div class="sub">Draft → submit → approve (N-of-M) → publish. Every action is recorded in the tamper-evident history.</div>
+    <div class="cols"><div id="chlist"></div><div id="chdetail"></div></div>`;
+  await loadChanges();
+  document.getElementById('chdetail').innerHTML = '<div class="muted">Select a change, or create a draft.</div>';
+}
+async function loadChanges(){
+  let d; try{ d = await api('/governance/changes'); }catch(e){ d = {changes:[]}; }
+  S.changes = d.changes || [];
+  let h = '';
+  if(hasPermission('contract:draft')) h += '<button class="primary" onclick="newChange()">New draft</button><div style="height:10px"></div>';
+  h += '<div class="list">';
+  if(!S.changes.length) h += '<div class="item muted">No change requests.</div>';
+  S.changes.forEach(c=>{ h += `<div class="item" onclick="showChange('${c.id}')"><span class="${CH_BADGE[c.status]||'pill'}">${c.status}</span> ${escapeHtml(c.identity)}<br><span class="muted">${escapeHtml(c.environment)} · ${escapeHtml(c.author)}</span></div>`; });
+  h += '</div>';
+  document.getElementById('chlist').innerHTML = h;
+}
+function newChange(){
+  const kindSel = KINDS.map(k=>`<option>${k}</option>`).join('');
+  document.getElementById('chdetail').innerHTML = `<div class="card">
+    <div class="row"><div><label>New from template</label><select id="chtmpl"><option value="">— kind —</option>${kindSel}</select></div>
+      <div style="max-width:100px;align-self:end"><button onclick="chLoadTmpl()">Load</button></div></div>
+    <label>Contract (JSON)</label><textarea id="chjson"></textarea>
+    <div class="toolbar"><button class="primary" onclick="submitDraft()">Create draft</button></div>
+    <div id="chresult"></div></div>`;
+}
+function chLoadTmpl(){ const k=document.getElementById('chtmpl').value; if(k) document.getElementById('chjson').value=JSON.stringify(TEMPLATES[k],null,2); }
+async function submitDraft(){
+  let doc; try{ doc=JSON.parse(document.getElementById('chjson').value); }catch(e){ document.getElementById('chresult').innerHTML=res(false,['Invalid JSON: '+e.message]); return; }
+  try{ const c=await api('/governance/changes',{method:'POST',body:JSON.stringify({contract:doc})}); await loadChanges(); showChange(c.id); }
+  catch(e){ document.getElementById('chresult').innerHTML=res(false,[e.body?.detail||e.message]); }
+}
+async function showChange(id){
+  let c; try{ c=await api('/governance/changes/'+id); }catch(e){ return; }
+  const appr = c.approvals||[];
+  const req = c.required_approvals==null?'—':c.required_approvals;
+  let compat = '';
+  if(c.compat){
+    const ok=c.compat.compatible;
+    compat = `<div class="${ok?'badge ok':'badge err'}">${ok?'compatible':'BREAKING'}</div>`;
+    if((c.compat.changes||[]).length)
+      compat += '<div class="result">'+c.compat.changes.map(x=>(x.breaking?'⚠ ':'· ')+x.field+': '+JSON.stringify(x.from)+' → '+JSON.stringify(x.to)).map(escapeHtml).join('\n')+'</div>';
+  }
+  let actions='';
+  if(c.status==='draft' && hasPermission('contract:submit')) actions+=`<button class="primary" onclick="chAct('${id}','submit')">Submit</button>`;
+  if(c.status==='submitted' && hasPermission('contract:approve')) actions+=`<button class="primary" onclick="chAct('${id}','approve')">Approve</button> <button onclick="chReject('${id}')">Reject</button>`;
+  if(c.status==='approved' && hasPermission('contract:publish')) actions+=`<button class="primary" onclick="chAct('${id}','publish')">Publish</button>`;
+  const prov = c.provenance?`<div class="kv"><span class="k">Promoted from</span><span class="v">${escapeHtml(c.provenance.promoted_from||'')}</span></div>`:'';
+  document.getElementById('chdetail').innerHTML = `<div class="card">
+    <div class="smhead"><span class="pill">${escapeHtml(c.contract_kind)}</span> <b>${escapeHtml(c.identity)}</b> <span class="${CH_BADGE[c.status]||'pill'}">${escapeHtml(c.status)}</span></div>
+    <div class="smdetail"><div class="kv"><span class="k">Environment</span><span class="v">${escapeHtml(c.environment)}</span></div>
+      <div class="kv"><span class="k">Author</span><span class="v">${escapeHtml(c.author)}</span></div>
+      <div class="kv"><span class="k">Approvals</span><span class="v">${appr.map(a=>escapeHtml(a.approver)).join(', ')||'—'} (${appr.length} / ${req})</span></div>${prov}</div>
+    ${compat}
+    <div class="toolbar">${actions||'<span class="muted">no actions available</span>'}</div>
+    <label>Contract</label><div class="result">${escapeHtml(JSON.stringify(c.contract,null,2))}</div>
+    <div id="chresult"></div></div>`;
+}
+async function chAct(id,action){ try{ await api('/governance/changes/'+id+'/'+action,{method:'POST'}); await loadChanges(); showChange(id); }catch(e){ alert(e.body?.detail||e.message); } }
+async function chReject(id){ const reason=prompt('Reject reason?')||''; try{ await api('/governance/changes/'+id+'/reject',{method:'POST',body:JSON.stringify({reason})}); await loadChanges(); showChange(id); }catch(e){ alert(e.body?.detail||e.message); } }
+
+// ---- Governance: Fleet ----
+async function renderFleet(){
+  const m=document.getElementById('main');
+  let f; try{ f=await api('/governance/fleet'); }catch(e){ m.innerHTML='<h2>Fleet</h2><div class="muted">unavailable</div>'; return; }
+  const active=Object.entries(f.active||{}).map(([k,id])=>`<tr><td>${escapeHtml(k.replace('active:',''))}</td><td>${escapeHtml(id)}</td></tr>`).join('')||'<tr><td colspan="2" class="muted">none</td></tr>';
+  const bf=Object.entries(f.backfills||{}).map(([e,st])=>`<tr><td>${escapeHtml(e)}</td><td><span class="pill">${escapeHtml(st.state||'—')}</span></td><td>${st.count==null?'—':st.count}</td></tr>`).join('')||'<tr><td colspan="3" class="muted">none</td></tr>';
+  const canCob=hasPermission('cob:set');
+  m.innerHTML=`<h2>Fleet</h2><div class="sub">Active contract versions, processing date, and cache drift.</div>
+    <div class="row">
+      <div class="card"><div class="muted">Environment</div><div class="brand">${escapeHtml(f.environment)}${f.is_production?' <span class="badge warn">PROD</span>':''}</div></div>
+      <div class="card"><div class="muted">COB / processing date</div><div class="brand">${f.cob==null?'—':f.cob}</div>${canCob?`<div class="toolbar"><button class="mini" onclick="cobAdvance()">Advance +1d</button></div>`:''}</div>
+      <div class="card"><div class="muted">Registry cache age</div><div class="brand">${f.cache_age_seconds}s</div></div>
+      <div class="card"><div class="muted">History integrity</div><div>${f.history&&f.history.ok?'<span class="badge ok">verified</span>':'<span class="badge err">BROKEN</span>'} <span class="muted">${(f.history&&f.history.count)||0}</span></div></div>
+    </div>
+    <h3>Active versions</h3><table><tr><th>Contract</th><th>Active identity</th></tr>${active}</table>
+    <h3>Backfills</h3><table><tr><th>Entity</th><th>State</th><th>Count</th></tr>${bf}</table>`;
+}
+async function cobAdvance(){ try{ await api('/governance/cob',{method:'POST',body:JSON.stringify({advance:true})}); renderFleet(); }catch(e){ alert(e.body?.detail||e.message); } }
+
+// ---- Governance: History ----
+async function renderHistory(){
+  const m=document.getElementById('main');
+  let d; try{ d=await api('/governance/log'); }catch(e){ m.innerHTML='<h2>History</h2>'; return; }
+  const ok=d.verify&&d.verify.ok;
+  const rows=(d.entries||[]).slice().reverse().map(e=>`<div class="trow"><span class="tdot"></span>
+    <span class="tver">#${e.seq}</span> <b>${escapeHtml(e.action)}</b> <span class="muted">${escapeHtml(e.actor)}</span>
+    <div class="tdetail">${escapeHtml(e.target||'')} ${escapeHtml(JSON.stringify(e.detail||{}))}</div>
+    <div class="ttxn">${new Date((e.ts||0)*1000).toLocaleString()}</div></div>`).join('');
+  m.innerHTML=`<h2>Publication History</h2>
+    <div class="sub">Append-only, hash-chained governance log. ${ok?'<span class="badge ok">chain verified</span>':'<span class="badge err">TAMPER DETECTED</span>'}</div>
+    <div class="trace">${rows||'<div class="muted">No history yet.</div>'}</div>`;
+}
+
+// ---- Governance: Backfill ----
+async function renderBackfill(){
+  const m=document.getElementById('main');
+  let d; try{ d=await api('/governance/backfill'); }catch(e){ d={backfills:{}}; }
+  const ctl=hasPermission('backfill:control');
+  const rows=Object.entries(d.backfills||{}).map(([e,st])=>{
+    const b=ctl?`<button class="mini" onclick="bfCtl('${e}','pause')">Pause</button> <button class="mini" onclick="bfCtl('${e}','resume')">Resume</button> <button class="mini" onclick="bfCtl('${e}','cancel')">Cancel</button>`:'';
+    return `<tr><td>${escapeHtml(e)}</td><td><span class="pill">${escapeHtml(st.state||'—')}</span></td><td>${st.count==null?'—':st.count}</td><td>${st.cursor?escapeHtml(String(st.cursor)):'—'}</td><td>${b}</td></tr>`;
+  }).join('')||'<tr><td colspan="5" class="muted">No backfills.</td></tr>';
+  m.innerHTML=`<h2>Backfill</h2><div class="sub">Fleet-visible status. ${ctl?'Pause / resume / cancel are honored cooperatively between documents.':''}</div>
+    <table><tr><th>Entity</th><th>State</th><th>Count</th><th>Cursor</th><th>Actions</th></tr>${rows}</table>`;
+}
+async function bfCtl(entity,action){ try{ await api('/governance/backfill/'+entity+'/'+action,{method:'POST'}); renderBackfill(); }catch(e){ alert(e.body?.detail||e.message); } }
+
+// ---- Governance: Promotion ----
+async function renderPromotion(){
+  document.getElementById('main').innerHTML=`<h2>Promotion</h2>
+    <div class="sub">Export a signed, provenance-stamped bundle to promote a version, or import one from a lower environment.</div>
+    <div class="cols">
+      <div class="card"><h3>Export</h3><label>Contract identity</label><input id="promId" placeholder="storage:trade:v1">
+        <div class="toolbar"><button class="primary" onclick="promExport()">Export &amp; download</button></div><div id="promOut"></div></div>
+      <div class="card"><h3>Import</h3><label>Bundle JSON ({bundle, signature})</label><textarea id="promImp"></textarea>
+        <div class="toolbar"><button class="primary" onclick="promImport()">Import</button></div><div id="promImpOut"></div></div>
+    </div>`;
+}
+async function promExport(){
+  const id=document.getElementById('promId').value.trim();
+  try{ const b=await api('/governance/promote/'+encodeURIComponent(id)+'/bundle',{method:'POST'});
+    _download(id.replace(/:/g,'_')+'.bundle.json', b);
+    document.getElementById('promOut').innerHTML=res(true,['Exported '+id+' — content hash '+b.bundle.content_hash.slice(0,16)+'…']);
+  }catch(e){ document.getElementById('promOut').innerHTML=res(false,[e.body?.detail||e.message]); }
+}
+async function promImport(){
+  let payload; try{ payload=JSON.parse(document.getElementById('promImp').value); }catch(e){ document.getElementById('promImpOut').innerHTML=res(false,['Invalid JSON']); return; }
+  try{ const c=await api('/governance/import',{method:'POST',body:JSON.stringify(payload)});
+    document.getElementById('promImpOut').innerHTML=res(true,['Imported as change '+c.id+' ('+c.status+') in '+c.environment]);
+  }catch(e){ document.getElementById('promImpOut').innerHTML=res(false,[e.body?.detail||e.message]); }
+}
+
+// ---- Governance: Evidence ----
+async function renderEvidence(){
+  document.getElementById('main').innerHTML=`<h2>Audit Evidence</h2>
+    <div class="sub">Export a tamper-evident evidence bundle (audit trail + interactions + governance log).</div>
+    <div class="card"><div class="row"><div><label>Entity (optional)</label><input id="evEntity" placeholder="trade"></div>
+      <div><label>Document id (optional)</label><input id="evDoc"></div></div>
+      <div class="toolbar"><button class="primary" onclick="evExport()">Export &amp; download</button></div><div id="evOut"></div></div>`;
+}
+async function evExport(){
+  const body={entity:document.getElementById('evEntity').value||null, doc_id:document.getElementById('evDoc').value||null};
+  try{ const b=await api('/governance/evidence',{method:'POST',body:JSON.stringify(body)});
+    _download('evidence_'+(body.entity||'all')+'.json', b);
+    document.getElementById('evOut').innerHTML=res(true,['Exported — counts '+JSON.stringify(b.manifest.counts)+' · hash '+b.manifest.content_hash.slice(0,16)+'…']);
+  }catch(e){ document.getElementById('evOut').innerHTML=res(false,[e.body?.detail||e.message]); }
+}
+function _download(name, obj){ const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href); }
+
 // ---- helpers ----
 function res(ok, lines){ const b='<span class="badge '+(ok?'ok':'err')+'">'+(ok?'OK':'FAILED')+'</span>';
   return '<div class="result">'+b+'\n'+lines.map(escapeHtml).join('\n')+'</div>'; }
@@ -550,8 +722,8 @@ function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':
   if(location.hash.startsWith('#token=')){
     S.token = decodeURIComponent(location.hash.slice('#token='.length));
     history.replaceState(null,'','/ui/');
-    try{ const me=await api('/auth/me'); S.user=me.principal; S.roles=me.roles;
-      sessionStorage.setItem('phx', JSON.stringify({token:S.token,user:S.user,roles:S.roles}));
+    try{ const me=await api('/auth/me'); S.user=me.principal; S.roles=me.roles; S.permissions=me.permissions||[];
+      sessionStorage.setItem('phx', JSON.stringify({token:S.token,user:S.user,roles:S.roles,permissions:S.permissions}));
       showApp(); return; }catch(e){}
   }
   try { const cfg=await (await fetch('/auth/config')).json();
@@ -561,8 +733,8 @@ function escapeHtml(s){ return String(s).replace(/[&<>]/g, c=>({'&':'&amp;','<':
       const n=document.getElementById('ssoNote'); n.style.display='block';
       n.textContent='Sign in with your organization account (Microsoft Entra).'; } } catch(e){}
   const saved=sessionStorage.getItem('phx');
-  if(saved){ const s=JSON.parse(saved); S.token=s.token; S.user=s.user; S.roles=s.roles;
-    try{ await api('/auth/me'); showApp(); return; }catch(e){} }
+  if(saved){ const s=JSON.parse(saved); S.token=s.token; S.user=s.user; S.roles=s.roles; S.permissions=s.permissions||[];
+    try{ const me=await api('/auth/me'); S.permissions=me.permissions||S.permissions; showApp(); return; }catch(e){} }
   document.getElementById('login').style.display='flex';
 })();
 </script>

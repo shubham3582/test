@@ -28,6 +28,23 @@ auth:
   # Fixed users (store password_sha256, not plaintext). Or use OIDC below.
   users:
     admin: {password_sha256: "${ADMIN_PW_SHA256}", roles: ["admin"]}
+    alice: {password_sha256: "${ALICE_PW_SHA256}", roles: ["author"]}
+    bob:   {password_sha256: "${BOB_PW_SHA256}",   roles: ["approver"]}
+    ops:   {password_sha256: "${OPS_PW_SHA256}",   roles: ["operator"]}
+
+  # --- config-driven RBAC: role -> permissions (union across a principal's roles) ---
+  # "*" grants everything; "<ns>:*" grants a namespace. Governance permissions:
+  #   governance:read  contract:{draft,submit,approve,publish,promote,rollback}
+  #   backfill:{run,control}  cob:set  evidence:export
+  # OIDC deployments map IdP groups -> these role names (auth.oidc.role_claim).
+  roles:
+    admin: ["*"]
+    viewer: ["governance:read"]
+    author: ["governance:read", "contract:draft", "contract:submit"]
+    approver: ["governance:read", "contract:approve", "contract:publish",
+               "contract:rollback", "evidence:export"]
+    operator: ["governance:read", "backfill:run", "backfill:control",
+               "cob:set", "contract:promote"]
 
   # --- Microsoft Entra / Azure AD (set provider: oidc to enable) ---
   oidc:

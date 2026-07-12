@@ -1,0 +1,25 @@
+# Governance control plane — environment identity + approval policy.
+# Maps to phronexus.config.GovernanceSettings.
+
+# This deployment's environment (dev/uat/prod are separate deployments).
+environment: prod
+tier: 2
+is_production: true
+promotion_source: uat        # the lower environment this one promotes from
+
+# N-of-M approvals: environment -> contract-kind -> required DISTINCT approvals.
+# "*" is the fallback at each level. Distinct approvers are enforced; the author
+# cannot approve their own change unless allow_self_approve is true.
+approval_policy:
+  prod:
+    storage: 2               # two-person rule for storage changes in prod
+    "*": 1
+  uat:
+    "*": 1
+  "*":
+    "*": 1
+allow_self_approve: false
+
+# HMAC key for signing promotion bundles + evidence hashes. Falls back to
+# api.auth.jwt_secret when unset. Rotate this.
+bundle_secret: "${GOV_BUNDLE_SECRET}"

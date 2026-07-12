@@ -134,6 +134,13 @@ class Phronexus:
             self.store, self.registry,
             grace_seconds=self.settings.reaper.orphan_grace_seconds,
         )
+        from phronexus.governance import GovernanceService
+
+        self.governance = GovernanceService(
+            self.store, self.registry, self.settings.governance, self.telemetry,
+            secret=(self.settings.governance.bundle_secret
+                    or self.settings.api.auth.jwt_secret),
+        )
         log.info("phronexus.ready", backend=self.settings.backend)
 
     # --- contract admin -------------------------------------------------
@@ -185,16 +192,31 @@ class Phronexus:
 
     # --- data plane -----------------------------------------------------
 
-    def put(self, entity: str, document: dict[str, Any]) -> str:
-        return self.manifest.write(entity, document)
+    def put(self, entity: str, document: dict[str, Any], *,
+            valid_from: Optional[int] = None) -> str:
+        # For a bitemporal entity with no explicit/document valid-time, default
+        # the effective date to the environment's COB (processing date).
+        if valid_from is None and self._is_bitemporal(entity):
+            valid_from = self.governance.get_cob()
+        return self.manifest.write(entity, document, valid_from=valid_from)
+
+    def _is_bitemporal(self, entity: str) -> bool:
+        try:
+            return self.registry.active_storage(entity).temporal == "bitemporal"
+        except ContractNotFound:
+            return False
 
     def put_many(self, entity: str, documents: list[dict[str, Any]]) -> list[str]:
         """Bulk-ingest documents. Each is a durable manifest commit (own CAS);
         the change-feed is relayed once at the end, not per document."""
         return self.manifest.write_many(entity, documents)
 
-    def get(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
-        return self.manifest.read(entity, doc_id)
+    def get(self, entity: str, doc_id: str, *, as_of: Optional[int] = None,
+            tx_as_of: Optional[float] = None) -> Optional[dict[str, Any]]:
+        # Bitemporal reads default the valid-time (as_of) to the environment COB.
+        if as_of is None and self._is_bitemporal(entity):
+            as_of = self.governance.get_cob()
+        return self.manifest.read(entity, doc_id, as_of=as_of, tx_as_of=tx_as_of)
 
     def get_many(self, entity: str, doc_ids) -> dict[str, dict[str, Any]]:
         """Batch-read documents by id — one batched round-trip per set instead of

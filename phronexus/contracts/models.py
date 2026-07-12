@@ -145,6 +145,14 @@ class StorageContract(_Base):
     projections: list[Projection]
     update_policy: UpdatePolicy = UpdatePolicy.upsert
     delete_policy: DeletePolicy = DeletePolicy.soft
+    # Temporal model. "none" is the standard latest-wins manifest. "bitemporal"
+    # makes every write an immutable temporal version stamped with a valid-time
+    # (business/effective date) and a transaction-time (system time), so reads
+    # are reproducible as-of any (valid_time, tx_time). ``valid_time_field`` names
+    # the document field that carries the effective date (int YYYYMMDD); when
+    # absent the write's valid-time defaults to the environment COB.
+    temporal: Literal["none", "bitemporal"] = "none"
+    valid_time_field: Optional[str] = None
     # Per-entity override of the backend's ``aerospike.use_native_txn``. The
     # manifest is always the visibility commit point; this only chooses HOW the
     # multi-record write underneath is done:

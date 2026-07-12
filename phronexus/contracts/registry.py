@@ -141,26 +141,62 @@ class ContractRegistry:
         self.refresh(force=True)
         return c
 
-    def _check_storage_compatible(self, new: StorageContract) -> None:
-        """Reject an evolution that would strand existing documents."""
+    def compat_report(self, new: StorageContract) -> dict:
+        """Explain what a proposed storage contract changes vs. the active version.
+
+        Returns ``{compatible, first_version, changes:[{field, from, to, breaking,
+        reason}]}``. A change is *breaking* when it would strand existing documents
+        (re-addresses their primary key, manifest set, or canonical location).
+        """
         try:
             prev = self.active_storage(new.entity)
         except ContractNotFound:
-            return  # first version — nothing to be compatible with
-        problems: list[str] = []
-        if prev.primary_key != new.primary_key:
-            problems.append(f"primary_key {prev.primary_key} -> {new.primary_key}")
-        if prev.manifest_set != new.manifest_set:
-            problems.append(f"manifest_set {prev.manifest_set!r} -> {new.manifest_set!r}")
+            return {"compatible": True, "first_version": True, "changes": []}
+
+        changes: list[dict] = []
+
+        def check(field, a, b, *, breaking, reason):
+            if a != b:
+                changes.append({"field": field, "from": a, "to": b,
+                                "breaking": breaking, "reason": reason})
+
+        check("primary_key", prev.primary_key, new.primary_key, breaking=True,
+              reason="changing the primary key re-addresses every existing document")
+        check("manifest_set", prev.manifest_set, new.manifest_set, breaking=True,
+              reason="moving the manifest set strands existing documents")
         pc, nc = prev.canonical_projection, new.canonical_projection
-        if (pc.set, pc.key) != (nc.set, nc.key):
-            problems.append(
-                f"canonical projection {pc.set}/{pc.key} -> {nc.set}/{nc.key}"
+        check("canonical_projection", f"{pc.set}/{pc.key}", f"{nc.set}/{nc.key}",
+              breaking=True, reason="the canonical record location changed")
+        # Informational (non-breaking): added projections / searchable coverage.
+        check("projection_count", len(prev.projections), len(new.projections),
+              breaking=False, reason="projections added/removed (run a backfill to materialise)")
+        check("version", prev.version, new.version, breaking=False,
+              reason="new contract version")
+
+        breaking = any(c["breaking"] for c in changes)
+        return {"compatible": not breaking, "first_version": False, "changes": changes}
+
+    def diff(self, identity_a: str, identity_b: str) -> dict:
+        """Field-level diff between two stored contract versions."""
+        da = self.get_version(identity_a).model_dump(mode="json")
+        db = self.get_version(identity_b).model_dump(mode="json")
+        changes = [
+            {"field": k, "from": da.get(k), "to": db.get(k)}
+            for k in sorted(set(da) | set(db)) if da.get(k) != db.get(k)
+        ]
+        return {"a": identity_a, "b": identity_b, "changes": changes}
+
+    def _check_storage_compatible(self, new: StorageContract) -> None:
+        """Reject an evolution that would strand existing documents."""
+        report = self.compat_report(new)
+        if not report["compatible"]:
+            problems = "; ".join(
+                f"{c['field']} {c['from']!r} -> {c['to']!r}"
+                for c in report["changes"] if c["breaking"]
             )
-        if problems:
             raise ContractValidationError(
                 f"incompatible storage change for {new.entity!r} (would strand existing "
-                f"documents): {'; '.join(problems)}. Publish with force=True to override."
+                f"documents): {problems}. Publish with force=True to override."
             )
 
     # --- lookups (served from cache) ------------------------------------

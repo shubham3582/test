@@ -231,6 +231,13 @@ class AuthSettings(BaseModel):
     mtls_allowed_cns: dict[str, str] = Field(default_factory=dict)
     # Principals allowed to hit contract-admin endpoints; empty means all.
     admin_principals: list[str] = Field(default_factory=list)
+    # Config-driven RBAC: role -> list of permission strings. A principal's
+    # effective permissions are the union over its roles. The wildcard "*" grants
+    # everything. Governance permissions are colon-namespaced, e.g.
+    # "contract:approve", "contract:publish", "backfill:control", "cob:set",
+    # "evidence:export", "governance:read". Default keeps the legacy "admin" role
+    # all-powerful; override entirely from config / an OIDC group->role mapping.
+    roles: dict[str, list[str]] = Field(default_factory=lambda: {"admin": ["*"]})
 
 
 class ApiSettings(BaseModel):
@@ -354,6 +361,31 @@ class AuditSettings(BaseModel):
     ttl_seconds: int = 0  # 0 = keep forever; set a horizon to auto-expire records
 
 
+class GovernanceSettings(BaseModel):
+    """Control-plane governance: this deployment's environment identity, the
+    N-of-M contract-approval policy, and the KV sets backing the governance
+    stores. See ``phronexus/governance/``."""
+
+    # Environment identity (dev/uat/prod are separate deployments).
+    environment: str = "dev"
+    tier: int = 0                        # ordinal used to order promotions
+    is_production: bool = False
+    promotion_source: str | None = None  # the lower environment this promotes from
+
+    # N-of-M approvals: environment -> contract-kind -> required DISTINCT approvals.
+    # "*" is the fallback at each level. Default: one approval everywhere.
+    approval_policy: dict = Field(default_factory=lambda: {"*": {"*": 1}})
+    allow_self_approve: bool = False     # separation of duties on by default
+
+    # Signing key for promotion bundles / evidence hashes (falls back to jwt_secret).
+    bundle_secret: str | None = None
+
+    changes_set: str = "_gov_changes"
+    log_set: str = "_gov_log"
+    env_set: str = "_gov_env"
+    backfill_state_set: str = "_backfill_state"
+
+
 class ReaperSettings(BaseModel):
     enabled: bool = False
     interval_seconds: int = 60
@@ -385,6 +417,7 @@ _GROUP_FILES = {
     "scheduler": "scheduler.yaml",
     "journal": "journal.yaml",
     "reaper": "reaper.yaml",
+    "governance": "governance.yaml",
 }
 
 # Set by load_settings(); read by the settings source.
@@ -470,6 +503,7 @@ class Settings(BaseSettings):
     scheduler: SchedulerSettings = Field(default_factory=SchedulerSettings)
     journal: JournalSettings = Field(default_factory=JournalSettings)
     audit: AuditSettings = Field(default_factory=AuditSettings)
+    governance: GovernanceSettings = Field(default_factory=GovernanceSettings)
 
     @classmethod
     def settings_customise_sources(

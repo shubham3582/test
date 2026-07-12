@@ -99,7 +99,30 @@ class Authenticator:
                         return value
         return None
 
+    # --- RBAC -----------------------------------------------------------
+
+    def permissions_for_roles(self, roles) -> set[str]:
+        """Union of the configured permissions for ``roles`` (``*`` = all)."""
+        perms: set[str] = set()
+        for role in roles:
+            perms.update(self.cfg.roles.get(role, ()))
+        return perms
+
+    def permissions(self, principal: Principal) -> set[str]:
+        return self.permissions_for_roles(principal.roles)
+
+    def has_permission(self, principal: Principal, perm: str) -> bool:
+        perms = self.permissions(principal)
+        if "*" in perms or perm in perms:
+            return True
+        # Namespace wildcard: "contract:*" grants "contract:approve" etc.
+        return f"{perm.split(':', 1)[0]}:*" in perms
+
     def is_admin(self, principal: Principal) -> bool:
+        # Admin == holds the "*" permission (the default role map gives the
+        # "admin" role "*"), or the legacy fallbacks below.
+        if "*" in self.permissions(principal):
+            return True
         if "admin" in principal.roles:
             return True
         admins = self.cfg.admin_principals

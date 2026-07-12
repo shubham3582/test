@@ -33,7 +33,14 @@ from phronexus.events.base import CommitEvent, EventSink
 from phronexus.kv.base import KVStore
 from phronexus.observability.telemetry import Telemetry
 from phronexus.query.inverted import InvertedIndex
-from phronexus.storage.projection import META_TXN, ProjectionEngine, decode_record
+from phronexus import codec
+from phronexus.storage.projection import (
+    DOC_BIN,
+    META_DOC_ID,
+    META_TXN,
+    ProjectionEngine,
+    decode_record,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -102,7 +109,15 @@ class ManifestManager:
 
     # --- write ----------------------------------------------------------
 
-    def write(self, entity: str, document: dict[str, Any], *, relay: bool = True) -> str:
+    def write(self, entity: str, document: dict[str, Any], *, relay: bool = True,
+              valid_from: Optional[int] = None) -> str:
+        # Bitemporal entities take the append-only temporal path (every write is
+        # an immutable version stamped with valid-time + transaction-time).
+        try:
+            if self._registry.active_storage(entity).temporal == "bitemporal":
+                return self._write_bitemporal(entity, document, valid_from, relay=relay)
+        except ContractNotFound:
+            pass
         with self._tel.span("manifest.write", entity=entity), self._tel.timed(
             "phronexus.write.latency", entity=entity
         ):
@@ -280,13 +295,18 @@ class ManifestManager:
         m = self._store.get(sc.manifest_set, event.doc_id)
         if m is None:
             return False
+        if m.bins.get("_bt"):  # bitemporal: committed if any version carries this txn
+            return any(v.get("txn") == event.txn_id for v in m.bins.get("versions", []))
         return event.txn_id in (m.bins.get(M_TXN), m.bins.get(M_PREV_TXN))
 
     # --- read -----------------------------------------------------------
 
-    def read(self, entity: str, doc_id: str) -> Optional[dict[str, Any]]:
+    def read(self, entity: str, doc_id: str, *, as_of: Optional[int] = None,
+             tx_as_of: Optional[float] = None) -> Optional[dict[str, Any]]:
         with self._tel.span("manifest.read", entity=entity):
             sc = self._registry.active_storage(entity)
+            if sc.temporal == "bitemporal":
+                return self._read_bitemporal(sc, doc_id, as_of, tx_as_of)
             manifest = self._store.get(sc.manifest_set, doc_id)
             if manifest is None or manifest.bins.get(M_STATUS) != STATUS_COMMITTED:
                 return None
@@ -465,6 +485,84 @@ class ManifestManager:
             return {}
         rec = self._store.get(canon["set"], canon["key"])
         return decode_record(sc.canonical_projection, rec.bins) if rec else {}
+
+    # --- bitemporal (valid-time + transaction-time) --------------------
+
+    def _resolve_valid_from(self, sc, document, valid_from) -> int:
+        """Effective (business) date for a write, as int YYYYMMDD. The document's
+        ``valid_time_field`` wins; else the explicit arg; else today."""
+        import datetime as _dt
+
+        if sc.valid_time_field and sc.valid_time_field in document:
+            return int(document[sc.valid_time_field])
+        if valid_from is not None:
+            return int(valid_from)
+        return int(_dt.date.today().strftime("%Y%m%d"))
+
+    def _write_bitemporal(self, entity, document, valid_from, *, relay=True) -> str:
+        """Append one immutable temporal version. The manifest record for the
+        logical doc holds an ordered ``versions`` index; the payload lives in a
+        version-suffixed canonical record. Reads reconstruct the as-of view."""
+        if self._validator is not None:
+            report = self._validator.validate(entity, document)
+            report.raise_if_failed()
+        sc = self._registry.active_storage(entity)
+        doc_id = self._proj.compute_doc_id(sc, document)
+        vf = self._resolve_valid_from(sc, document, valid_from)
+        tx_from = time.time()
+        txn_id = uuid.uuid4().hex
+        cset = sc.canonical_projection.set
+        vkey = f"{doc_id}|{tx_from:.6f}|{vf}"
+        self._store.put(cset, vkey, {
+            DOC_BIN: codec.pack(document), META_DOC_ID: doc_id, META_TXN: txn_id,
+            "_valid_from": vf, "_tx_from": tx_from,
+        })
+        # Append to the temporal index under generation CAS (concurrent writers
+        # to the same logical doc retry).
+        versions: list = []
+        for attempt in range(self._write_max_retries + 1):
+            idx = self._store.get(sc.manifest_set, doc_id)
+            versions = list(idx.bins.get("versions", [])) if idx else []
+            gen = idx.generation if idx else 0
+            versions.append({"tx": tx_from, "vf": vf, "key": vkey, "txn": txn_id})
+            try:
+                self._store.put(sc.manifest_set, doc_id, {
+                    "_bt": True, M_STATUS: STATUS_COMMITTED, M_DOC_ID: doc_id,
+                    "versions": versions,
+                }, expected_generation=gen)
+                break
+            except GenerationConflict:
+                if attempt >= self._write_max_retries:
+                    raise
+        event = CommitEvent(
+            entity=entity, doc_id=doc_id, txn_id=txn_id, contract_version=sc.version,
+            op="upsert", ts=tx_from, document=dict(document), version=len(versions),
+        )
+        self._store.put(self._changefeed_set, f"{doc_id}:{txn_id}", {"ev": event.to_dict()})
+        self._tel.incr("phronexus.writes", entity=entity)
+        if relay and self._inline_changefeed:
+            self.drain_changefeed()
+        log.info("document.committed", entity=entity, doc_id=doc_id, txn=txn_id,
+                 valid_from=vf, temporal="bitemporal")
+        return doc_id
+
+    def _read_bitemporal(self, sc, doc_id, as_of, tx_as_of) -> Optional[dict[str, Any]]:
+        import datetime as _dt
+
+        idx = self._store.get(sc.manifest_set, doc_id)
+        if idx is None or not idx.bins.get("_bt"):
+            return None
+        tt = time.time() if tx_as_of is None else float(tx_as_of)
+        vt = int(as_of) if as_of is not None else int(_dt.date.today().strftime("%Y%m%d"))
+        # Only what was known by tx-time tt and effective by valid-time vt; the
+        # latest correction (max tx) effective at vt wins (tie-break: max vf).
+        candidates = [v for v in idx.bins.get("versions", [])
+                      if v["tx"] <= tt and v["vf"] <= vt]
+        if not candidates:
+            return None
+        best = max(candidates, key=lambda v: (v["tx"], v["vf"]))
+        rec = self._store.get(sc.canonical_projection.set, best["key"])
+        return dict(codec.unpack(rec.bins[DOC_BIN])) if rec else None
 
     def _reap_superseded(self, existing, records, sc: StorageContract) -> None:
         """Remove projection records no longer referenced after an update."""

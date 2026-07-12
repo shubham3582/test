@@ -42,6 +42,24 @@ def require_admin(
     return principal
 
 
+def require_permission(perm: str):
+    """Dependency factory: require ``perm`` (config-driven RBAC). 403 otherwise.
+
+    Usage: ``dependencies=[Depends(require_permission("contract:approve"))]`` or
+    ``principal = Depends(require_permission("cob:set"))`` to also bind the caller.
+    """
+
+    def _dep(
+        principal: Principal = Depends(require_principal),
+        authn: Authenticator = Depends(get_authenticator),
+    ) -> Principal:
+        if not authn.has_permission(principal, perm):
+            raise _forbidden(f"missing required permission: {perm}")
+        return principal
+
+    return _dep
+
+
 class _AuthPhronexusError(PhronexusError):
     def __init__(self, code: str, status: int, detail: str):
         super().__init__(detail)
