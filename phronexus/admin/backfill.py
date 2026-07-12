@@ -11,7 +11,7 @@ It is **restartable** (a per-entity checkpoint cursor resumes an interrupted run
 and **controllable**: the governance control plane can request pause / cancel and
 the job honours it cooperatively between documents, persisting a ``state`` that is
 fleet-visible. State record (in the backfill-state set, keyed by entity):
-``{cursor, count, done, state, requested_action, updated_ts, error}``.
+``{cursor, count, done, state, req_action, updated_ts, error}``.
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ class BackfillJob:
             if rec.bins.get(M_STATUS) == STATUS_COMMITTED
         )
         if not dry_run:
-            # Note: we do NOT clear requested_action here, so a pause/cancel
+            # Note: we do NOT clear req_action here, so a pause/cancel
             # requested before the run starts is still honoured on the first doc.
             self._write(entity, state="running", error=None)
 
@@ -70,13 +70,13 @@ class BackfillJob:
                 continue  # already done in a prior (interrupted) run
             if not dry_run:
                 # Cooperative control point: honour a pause/cancel request.
-                action = self._state(entity).get("requested_action")
+                action = self._state(entity).get("req_action")
                 if action == "pause":
-                    self._write(entity, state="paused", requested_action=None)
+                    self._write(entity, state="paused", req_action=None)
                     log.info("backfill.paused", entity=entity, count=count)
                     return count
                 if action == "cancel":
-                    self._write(entity, state="cancelled", requested_action=None)
+                    self._write(entity, state="cancelled", req_action=None)
                     log.info("backfill.cancelled", entity=entity, count=count)
                     return count
             doc = self._px.get(entity, doc_id)
@@ -89,7 +89,7 @@ class BackfillJob:
 
         if not dry_run:
             self._write(entity, cursor=(ids[-1] if ids else cursor), count=count,
-                        done=True, state="completed", requested_action=None)
+                        done=True, state="completed", req_action=None)
         log.info("backfill.done", entity=entity, documents=count, version=sc.version,
                  dry_run=dry_run, resumed=cursor is not None)
         return count

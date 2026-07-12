@@ -5,7 +5,11 @@ services:
   aerospike:
     image: aerospike/aerospike-server:7.1.0.0
     ports: ["3000-3002:3000-3002"]
-    command: ["--config-file", "/etc/aerospike/aerospike.conf"]
+    # Bypass the image entrypoint: it renders a DEFAULT template over
+    # /etc/aerospike/aerospike.conf (clobbering our namespace). Run asd directly
+    # against our mounted config instead, so the `phronexus` namespace is used.
+    entrypoint: ["/usr/bin/asd"]
+    command: ["--foreground", "--config-file", "/etc/aerospike/aerospike.conf"]
     volumes:
       - ./deploy/aerospike.conf:/etc/aerospike/aerospike.conf:ro
 

@@ -292,7 +292,7 @@ class GovernanceService:
 
     # --- backfill status + intervention (GOV7) -------------------------
 
-    _BF_FIELDS = ("state", "cursor", "count", "done", "requested_action", "error", "updated_ts")
+    _BF_FIELDS = ("state", "cursor", "count", "done", "req_action", "error", "updated_ts")
 
     def backfill_status(self, entity: Optional[str] = None) -> dict:
         out: dict[str, dict] = {}
@@ -308,11 +308,11 @@ class GovernanceService:
         rec = self._store.get(self._cfg.backfill_state_set, entity)
         cur = dict(rec.bins) if rec else {}
         if action == "reset":
-            cur.update(cursor=None, done=False, state="reset", requested_action=None)
+            cur.update(cursor=None, done=False, state="reset", req_action=None)
         elif action == "resume":
-            cur.update(requested_action=None, state="running")
+            cur.update(req_action=None, state="running")
         else:  # pause | cancel — the running job picks it up cooperatively
-            cur["requested_action"] = action
+            cur["req_action"] = action
         cur["updated_ts"] = time.time()
         self._store.put(self._cfg.backfill_state_set, entity, cur)
         self.log.append(f"backfill.{action}", actor, target=entity)
