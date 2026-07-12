@@ -33,6 +33,15 @@ cover our Aerospike write. So Phronexus uses the **transactional outbox**:
 The honest guarantee is **"atomic durable transition + effectively-once
 emission,"** not literal 2PC — which is the strongest this class of system offers.
 
+> **Precondition (enforced).** The atomic block needs native multi-record
+> transactions, so on a store that can't provide them the state machine **fails
+> fast** at build time — unless you explicitly opt into best-effort mode
+> (`statemachine.require_atomic: false`), where it degrades to at-least-once
+> (e.g. Aerospike Community Edition). A write conflict on the same document is
+> **retried** (`aerospike.write_max_retries`); if it can't be resolved the event
+> is rejected and dead-lettered rather than crashing the runner. `phronexus
+> doctor` reports whether atomic writes are available.
+
 ## The transactional loop
 
 ```
@@ -145,10 +154,13 @@ The transition is durable the moment it commits; the relay publishes
 at-least-once and can run with multiple replicas (rows are removed only after a
 successful publish; consumers dedup on event id).
 
-**Dead-letter queue.** Set `statemachine.dlq_topic` and the runner routes
-rejected/poison events there (with their reason) instead of dropping them —
+**Dead-letter queue (durable).** Set `statemachine.dlq_topic` and the runner
+routes rejected/poison events there (with their reason). The DLQ is **durable-
+first** — the dead-letter event is staged in the outbox before it is relayed, so a
+publish failure leaves it queued for retry, never silently dropped.
 `applied`/`duplicate` and hook-`dropped` events are not dead-lettered. The runner
-also shuts down gracefully on SIGTERM (drain, then commit offsets).
+loops with exponential backoff on a transient broker/store error (it doesn't
+crash) and shuts down gracefully on SIGTERM (drain, then commit offsets).
 
 **Event-schema validation (produce-time).** A `stream` contract registers a JSON
 Schema per emitted event type. Before the commit, each output event's payload is

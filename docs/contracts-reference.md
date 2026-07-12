@@ -250,4 +250,9 @@ px.publish_contract(dict_or_model, activate=True)  # programmatic
 Or over REST: `POST /contracts` (requires an admin principal). Publishing
 refreshes the in-process cache immediately for the publishing process; other
 processes pick it up on their next refresh (`contracts.refresh_seconds`,
-default 300).
+default 300). A version is immutable once published — re-publishing the same
+identity with different bytes is rejected; publish a new version instead.
+
+For a **governed** change (RBAC, N-of-M approval, audit trail, backfill), route it
+through the control plane instead of publishing directly — see
+[governance.md](governance.md).

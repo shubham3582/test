@@ -144,7 +144,7 @@ ordering, so it holds exactly as far as these four links:
 | Producer → Kafka | `acks=all`, retries on | a message can be lost at the broker *before* Phronexus ever sees it |
 | Kafka / MSK | replication ≥ 2, `min.insync.replicas` ≥ 2, no unclean leader election, retention **>** worst consumer lag | committed messages lost on failover, or aged out if a consumer lags past retention |
 | Aerospike | Enterprise + **strong-consistency (SC)** namespace, persistent storage, replication | a *memory* namespace (the dev stack) loses everything on restart; a non-SC namespace can drop an acked write on failover |
-| Rejects | a `dlq_topic` (`statemachine.dlq_topic`) | a rejected/poison message is acked and **dropped** (by design — but gone) |
+| Rejects | a `dlq_topic` (`statemachine.dlq_topic`) | **without** a DLQ a rejected/poison message is acked and gone; **with** one it is durably dead-lettered (staged in the outbox first, so it survives a publish failure) |
 
 > ⚠️ The dev/test stack uses `storage-engine memory` and often no DLQ, so it does
 > **not** give you no-loss. Production config does — see [deployment.md](deployment.md#aerospike)

@@ -27,6 +27,7 @@ flowchart TB
       SM[State Machine<br/>hooks + outbox]
       SCH[Scheduler<br/>CAS lease · exactly-once]
       JRN[Journals<br/>msgpack req/resp + messages]
+      GOV[Governance control plane<br/>RBAC · approval · history · promotion]
     end
 
     subgraph stores[Stores]
@@ -65,11 +66,19 @@ own process (scale/restart freely): the **retention worker** (→ Iceberg) and t
 `GET …/trace`). With no Kafka (the in-memory dev backend) the audit consumer runs
 inline off the in-process feed, so a trace exists with zero services.
 
+Above the data plane sits the **governance control plane** ([governance.md](governance.md)):
+config-driven RBAC, a change→approve→publish workflow (N-of-M approvals + separation of
+duties), an immutable hash-chained history, environment promotion, a per-environment COB
+(processing date), backfill control, and tamper-evident evidence export. It wraps — never
+bypasses — the contract registry's `publish`/`activate` primitives. Storage entities can
+opt into **bitemporal** mode ([bitemporal.md](bitemporal.md)) for as-of-reproducible reads
+against a COB.
+
 The **six contract kinds** drive every layer:
 
 | Contract | Drives | Layer |
 |---|---|---|
-| `storage` | primary key, projections across sets, update/delete policy, TTL, Iceberg | Manifest Manager |
+| `storage` | primary key, projections across sets, update/delete policy, TTL, **bitemporal** temporal mode, Iceberg | Manifest Manager |
 | `query` | searchable fields + indexes, named query patterns | Inverted Index + Query Engine |
 | `view` | consumer output: allow-list, masking, transforms | View Engine |
 | `validation` | JSON Schema + data-quality checks | Validator |

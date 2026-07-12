@@ -289,6 +289,14 @@ phronexus --contracts-dir examples/bond backfill bond
 
 Old documents remain readable under their original version until backfilled.
 
+> **Governed evolution.** The direct `publish` above is the admin path. In a
+> governed deployment the same change flows through the control plane —
+> `draft → submit → approve (N-of-M) → publish` — with a compatibility
+> explanation, an immutable audit trail, and permission gates; the backfill is
+> then pausable/resumable. Re-publishing a version with *different* bytes is
+> rejected (versions are immutable); publish a new version instead. See
+> [governance.md](governance.md).
+
 > **Contracts live in Aerospike, not in files.** The `_contracts` set is the
 > source of truth. YAML files are only an ingestion vehicle: publish once
 > (`phronexus ingest ./contracts` or `POST /contracts`), verify with

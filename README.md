@@ -10,19 +10,22 @@ contracts** that live in the datastore and hot-reload, so new business entities
 - **Operational store:** Aerospike (hot path) — with a supported escape hatch to native features
 - **Retention store:** Apache Iceberg (optional, async, long-term) — an insert-only, idempotent log
 - **Change feed:** Kafka / Redpanda
-- **Interfaces:** Python SDK + REST
-- **Also:** a transactional state machine, a distributed exactly-once scheduler, binary (msgpack) journals, and a per-document **trace / debug view** (decoupled audit worker off the change feed)
+- **Interfaces:** Python SDK + REST + a self-contained web console
+- **Data plane:** a transactional state machine, a distributed exactly-once scheduler, **bitemporal** as-of reads, binary (msgpack) journals, a per-document **trace / debug view**, and **lineage** (source event → result)
+- **Control plane:** a governance layer — config-driven **RBAC**, a change→approve→publish workflow (N-of-M approvals + separation of duties), immutable **hash-chained history**, environment **promotion**, per-environment **COB**, backfill control, and tamper-evident **evidence export**
 
-> **Status:** feature-complete prototype — contracts, write/read via the
-> manifest pattern, config-driven inverted-index search, consumer views, REST
-> API + remote SDK with API-key/bearer/mTLS auth, a transactional state machine,
-> a distributed exactly-once scheduler, insert-only Iceberg retention off the
-> Kafka change feed, a decoupled audit worker that builds a per-document
-> trace / debug view off the same feed, binary msgpack journals, and supported
-> native-Aerospike access — plus operational tooling (contract backfill, admin CLI, load
-> harness). Runs today on a built-in in-memory backend (no services required)
-> and on Aerospike. A full **Counterparty-Credit-Risk reference** is built on it
-> in [`examples/ccr/`](examples/ccr).
+> **Status:** a hardened, guarantee-backed data plane plus a full governance
+> control plane. The data plane covers contracts, manifest write/read, inverted-
+> index search, consumer views, a transactional state machine, an exactly-once
+> scheduler, insert-only Iceberg retention, a decoupled audit/trace worker,
+> bitemporal storage, and supported native-Aerospike access — with Stage-1
+> crash-consistency guarantees (fault-injection tested). The control plane adds
+> config-driven RBAC, contract approval/publication governance, promotion,
+> evidence, and lineage. Runs on a built-in in-memory backend (no services) and
+> on Aerospike. A **production-depth Counterparty-Credit-Risk reference** —
+> onboarding, netting-set lifecycle, cube projection, intraday recalc, COB
+> reproducibility, hot/cold tiering, lineage, and recovery — is built on it in
+> [`examples/ccr/`](examples/ccr).
 
 ---
 
@@ -30,15 +33,17 @@ contracts** that live in the datastore and hot-reload, so new business entities
 
 Full docs are in [`docs/`](docs/):
 
-- **[architecture.md](docs/architecture.md)** — mental model, components, write path, state machine (with diagrams).
+- **[architecture.md](docs/architecture.md)** — mental model, components, write path, state machine, control plane (with diagrams).
 - **[building-on-phronexus.md](docs/building-on-phronexus.md)** — developer guide: onboard an entity by config end-to-end, hooks, REST/SDK, evolving contracts.
-- **[api-reference.md](docs/api-reference.md)** — the verbs at a glance: Python, REST, and the remote SDK.
-- **[contracts-reference.md](docs/contracts-reference.md)** — every field of the six contract kinds.
+- **[governance.md](docs/governance.md)** — the control plane: RBAC, change→approve→publish, hash-chained history, rollback, promotion, COB, backfill control, evidence export.
+- **[bitemporal.md](docs/bitemporal.md)** — bitemporal storage: valid-time + transaction-time, as-of reads, COB defaulting, late/corrected events.
+- **[api-reference.md](docs/api-reference.md)** — the verbs at a glance: Python, REST (incl. governance + lineage), and the remote SDK.
+- **[contracts-reference.md](docs/contracts-reference.md)** — every field of the six contract kinds (incl. `temporal`/`valid_time_field`).
 - **[storage-layouts.md](docs/storage-layouts.md)** — physical storage options: `msgpack`/`bins`/`spread` encodings, `bin_map`, `native_txn`, batch reads.
 - **[state-machine.md](docs/state-machine.md)** — the transactional state machine in depth.
-- **[ccr-reference.md](docs/ccr-reference.md)** — end-to-end reference: the CCR saga, the hot value cube, and the exactly-once scheduler, all as config.
+- **[ccr-reference.md](docs/ccr-reference.md)** — production-depth Counterparty-Credit-Risk reference: the ten proofs (onboarding → recovery), all as config.
 - **[retention-and-journals.md](docs/retention-and-journals.md)** — insert-only, self-reconciling retention log and the binary msgpack journals.
-- **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, native-client options, TLS/mTLS, auth, observability, ops.
+- **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, native-client options, TLS/mTLS, auth, RBAC, observability, ops.
 
 ## Try it (no services)
 
@@ -53,7 +58,7 @@ python examples/bond/run_bond.py        # onboard an entity by config, end to en
 | Example | Shows |
 |---|---|
 | [`bond`](examples/bond) | onboard an entity by config (storage/query/view/validation/transition) |
-| [`ccr`](examples/ccr) | Counterparty-Credit-Risk saga + hot value cube + exactly-once scheduler |
+| [`ccr`](examples/ccr) | **production-depth CCR**: onboarding + reference DQ, netting-set lifecycle + served aggregation, cube projection, intraday recalc, bitemporal COB, hot/cold tiering, lineage, recovery (ten proofs, `pytest -m ccr`) |
 | [`otc_trade`](examples/otc_trade) | validation → ETL → dual-shape storage (`t_doc` msgpack + `t_base` bins), reference-data DQ, named indexes `idx_cp`/`idx_ns`, batch `find` |
 | [`fvcube`](examples/fvcube) | a future-value cube stored **transposed** — each date its own bin (`spread`) |
 | [`fv_paths`](examples/fv_paths) | the cube **at scale** — 3 parts × ~2000 numbers/date: one record per date, parts as bins, max per date |
@@ -65,10 +70,13 @@ backend (no services); prefix with `PHRONEXUS_BACKEND=aerospike` to run the same
 code against a live Aerospike + Kafka stack.
 
 **Management UI:** the API serves a self-contained web console at `/ui` — browse/edit
-contracts (validate-before-save), validate documents, drive state machines,
-browse data, and **trace** any document's lifecycle (every commit, delete, and
-state transition — the debug view), behind JWT login (fixed users now; Microsoft
-Entra / Azure AD via the OIDC provider seam). See
+contracts with their version history, validate documents, drive state machines,
+browse data, and **trace** any document's lifecycle. It also fronts the **control
+plane** — permission-gated **Change Requests** (draft → approve → publish),
+**Fleet** (active versions, drift, COB), hash-chained **History**, **Backfill**
+controls, **Promotion**, **Evidence** export, and **Lineage** — with tabs and
+controls gated by the caller's permissions. Behind JWT login (fixed users now;
+Microsoft Entra / Azure AD via the OIDC provider seam). See
 [docs/deployment.md](docs/deployment.md#management-ui).
 
 ## Why manifests
@@ -196,7 +204,9 @@ PHRONEXUS_BACKEND=memory python -m phronexus.api.server   # serves on :8080
 | `POST /entities/{entity}/events` | **submit a domain event (sync state-machine accept/reject)** |
 | `POST /entities/{entity}/patterns/{name}` | named parameterised query |
 | `GET /entities/{entity}/views/{view}/documents/{id}` | read through a view |
+| `GET /entities/{entity}/documents/{id}/trace` · `/lineage` | audit trace · source→result lineage |
 | `POST /contracts` · `POST /contracts/refresh` | contract admin (admin principal) |
+| `/governance/*` | control plane: changes, approval, fleet, history, promotion, evidence (permission-gated) |
 | `GET/PUT/DELETE /schedules` · `POST /schedules/tick` | scheduler admin (admin principal) |
 | `GET /healthz` · `GET /readyz` | liveness / readiness |
 
@@ -209,9 +219,12 @@ c.query("trade", [{"field": "counterparty", "op": "eq", "value": "GS"}], view="p
 ```
 
 **Auth** is pluggable and configured centrally (`PHRONEXUS_API__AUTH__*`): any subset of
-`none` / `api_key` / `bearer` / `mtls`, tried in order. mTLS reads the client-cert
-CN from a trusted proxy header (or the TLS transport). Contract-admin endpoints
-additionally require an admin principal. Every request gets a bound `request_id`
+`none` / `api_key` / `bearer` / `jwt` / `mtls` (+ OIDC login for the console), tried
+in order. mTLS reads the client-cert CN from a trusted proxy header (or the TLS
+transport). **Authorization is config-driven RBAC** — `auth.roles` maps each role
+to permission strings (from JWT/OIDC claims), enforced per-endpoint (contract-admin
+still requires admin; governance actions require their specific permission — see
+[docs/governance.md](docs/governance.md)). Every request gets a bound `request_id`
 in the structured logs and an `X-Request-ID` response header; OTel FastAPI
 instrumentation attaches when `OTEL_ENABLED=true`.
 
@@ -309,7 +322,10 @@ domain event, load the entity's current state, evaluate a metadata-driven
 events, and record a dedup marker — in one Aerospike transaction — then relay the
 outbox to Kafka. The guarantee is **atomic durable transition + effectively-once
 emission** (transactional outbox + idempotent writes + input dedup), the strongest
-this class of system can give without literal 2PC.
+this class of system can give without literal 2PC. The atomic block needs native
+transactions, so it **fails fast** on a store that can't provide them (opt into
+best-effort at-least-once with `statemachine.require_atomic: false` for CE); write
+conflicts are retried, and rejected/poison events are **durably** dead-lettered.
 
 ```python
 sm = px.state_machine(output=publisher)
@@ -345,6 +361,57 @@ sch.upsert_schedule(ScheduleSpec(name="ccr-eod", topic="kafka://ccr.eod",
 Run standalone (`python -m phronexus.scheduler.runner`, scale to N replicas),
 manage over REST (`PUT/GET/DELETE /schedules`, admin), or embed `px.scheduler()`.
 See [docs/ccr-reference.md](docs/ccr-reference.md#the-scheduler--eod-exactly-once-across-replicas).
+
+## Governance control plane
+
+Above the data plane, a governance layer turns "publish a contract" into a
+governed, audited change — the difference between a framework and an enterprise
+product. It **wraps, never bypasses**, the registry primitives.
+
+- **Config-driven RBAC** — roles map to permissions in config (`auth.roles`);
+  `require_permission(...)` gates every action (403 otherwise). Consumed by JWT/OIDC.
+- **Approval workflow** — a change goes `draft → submit → approve → publish` with a
+  **configurable N-of-M** policy (per environment × contract kind), **distinct**
+  approvers, and separation of duties (the author can't self-approve).
+- **Compatibility explanations** — a structured report of what changed and why it
+  is/isn't breaking, plus a field-level version `diff`.
+- **Immutable history** — every action is appended to a SHA-256 **hash-chained**
+  log; any edit/reorder/delete is detectable (`verify()`).
+- **Governed rollback** — flip the active pointer to a prior version, audited and
+  reversible; version history is never mutated.
+- **Environment promotion** — a signed, provenance-stamped bundle export/import
+  (air-gapped/cross-cluster) plus a direct cross-store path.
+- **Evidence export** — a windowed, tamper-evident bundle (audit trail +
+  interactions + governance log) with a content hash and log-head hash.
+- **Fleet + backfill + COB** — one view of active versions, drift, and COB;
+  cooperative pause/resume/cancel of backfills; a per-environment processing date.
+
+```python
+cr = px.governance.draft("alice", contract_v2)      # author drafts
+px.governance.submit("alice", cr["id"])             # compat check + required approvals
+px.governance.approve("bob", cr["id"])              # a DIFFERENT approver (SoD)
+px.governance.publish("bob", cr["id"])              # only when approved
+px.governance.log.verify()                          # {"ok": true, ...}
+```
+
+Over REST at `/governance/*` (permission-gated) and in the console's governance
+tabs. See [docs/governance.md](docs/governance.md).
+
+## Bitemporal storage (as-of / COB reproducibility)
+
+A storage entity can opt into `temporal: bitemporal` to track two time axes —
+**valid time** (the business/effective date, e.g. COB) and **transaction time**
+(when it was recorded). A read as-of `(valid_time, tx_time)` returns what was
+*known by* `tx_time` to be *effective at* `valid_time`, so a past COB view is
+**reproducible**: later writes and backdated corrections never change it.
+
+```python
+px.get("exposure_result", "T", as_of=20260711)                # value effective at that COB
+px.get("exposure_result", "T", as_of=20260711, tx_as_of=t0)   # ... as it was known at t0
+```
+
+`as_of`/`valid_from` default to the environment COB. See
+[docs/bitemporal.md](docs/bitemporal.md).
 
 ## Binary journals (msgpack)
 
@@ -479,12 +546,14 @@ phronexus/
   statemachine/        # transactional state machine (hooks, I/O, node, runner)
   scheduler/           # distributed exactly-once scheduler (CAS lease)
   retention/           # insert-only Iceberg log: source, warehouse, worker
+  governance/          # control plane: service, hash-chained log, promote, evidence
+  lineage.py           # source-event -> result lineage assembler
   events/              # change-feed sinks (memory, kafka)
   codec.py             # msgpack pack/unpack (binary envelopes)
   journal.py           # message + request/response journals
   native.py            # supported native-Aerospike accessor (managed-set guard)
-  observability/       # structured logging + OTel telemetry
-  api/                 # FastAPI app, routers, auth, middleware, server
+  observability/       # structured logging + OTel telemetry + durability preflight
+  api/                 # FastAPI app, routers (incl. governance), auth + RBAC, UI
   sdk/                 # PhronexusClient (remote HTTP SDK)
   admin/               # contract backfill job
   cli.py               # phronexus admin CLI
@@ -497,10 +566,13 @@ scripts/loadtest.py    # throughput harness
 - ~~**Phase 3** — REST API (FastAPI), auth (API key / bearer / mTLS-CN), request tracing.~~ ✅
 - ~~**Phase 4** — Iceberg retention worker consuming the Kafka change feed.~~ ✅
 - ~~**Phase 5** — load tests, contract backfill job, admin CLI.~~ ✅
+- ~~**Stage 1** — crash-consistency hardening: guarantee-backed write/commit, reaper grace, retention idempotence, consumer recovery, a deterministic fault-injection harness.~~ ✅
+- ~~**Stage 2** — governance control plane: config-driven RBAC, contract approval + publication history, compatibility checks on publish, promotion, evidence, bitemporal COB.~~ ✅
+- ~~**Stage 3** — production-depth CCR reference: onboarding, netting-set lifecycle, intraday recalc, hot/cold tiering, lineage, recovery.~~ ✅
 
-**Beyond the prototype:** row-level Iceberg merge/compaction, index sharding for
-hot terms, contract schema-compatibility checks on publish, RBAC scopes per
-view, and horizontal load testing against a real Aerospike + Kafka cluster.
+**Beyond:** row-level Iceberg merge/compaction, index sharding for hot terms,
+per-view RBAC scopes, property-based/randomized-seed chaos fuzzing, and horizontal
+load testing against a real Aerospike + Kafka cluster.
 
 ## Design decisions
 
