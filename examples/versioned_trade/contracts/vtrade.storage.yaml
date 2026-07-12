@@ -1,0 +1,24 @@
+# Versioned, INSERT-ONLY trade store (append-only / bitemporal).
+#
+# Every amendment is a NEW immutable version, keyed by (trade_id, trade_version).
+# Nothing is ever overwritten, so:
+#   * re-inserting an existing version is a no-op (idempotent, DocumentAlreadyExists)
+#   * "latest"        = the highest trade_version for a trade_id
+#   * "as of time T"  = the version whose valid_from is the greatest <= T
+# `valid_from` is the effective/business time the version became current.
+kind: storage
+entity: vtrade
+version: 1
+primary_key: [trade_id, trade_version]     # version is part of the immutable key
+manifest_set: vtrade_manifest
+update_policy: insert_only                  # <-- immutable versions; re-insert rejected
+delete_policy: soft
+projections:
+  - name: doc
+    set: vtrade_doc
+    key: "{trade_id}:{trade_version}"
+    fields: ["*"]
+    encoding: msgpack
+    canonical: true
+iceberg:
+  enabled: false

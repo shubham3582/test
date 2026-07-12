@@ -1,0 +1,14 @@
+# Numeric indexes on trade_version and valid_from drive the "latest" and
+# "as-of" reads (sort desc + clip to 1). trade_id seeds the lookup.
+kind: query
+entity: vtrade
+version: 1
+searchable:
+  - {field: trade_id,      index: string,  name: idx_tid}
+  - {field: trade_version, index: numeric, name: idx_ver}   # -> latest = max version
+  - {field: valid_from,    index: numeric, name: idx_vf}    # -> as-of = max valid_from <= T
+patterns:
+  - name: all_versions
+    where:
+      - {field: trade_id, op: eq, value: "${trade_id}"}
+    limit: 10000

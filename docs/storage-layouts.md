@@ -61,6 +61,15 @@ cross-record durability under failure.
 | A cube stored transposed — each date its own bin | one record per (trade, scenario) + `spread` on `curve` | [`examples/fvcube/`](../examples/fvcube) |
 | A cube at scale — 3 parts × ~2000 numbers per date | one record **per date** (date in PK), parts as bins, `max` per date | [`examples/fv_paths/`](../examples/fv_paths) |
 
+## Versioning / immutability (insert-only)
+
+To keep an immutable history (amendments, dated snapshots), put the version (or
+`as_of`) in the primary key and set `update_policy: insert_only`. Nothing is ever
+overwritten, so re-delivering a version is an idempotent no-op. Read the **latest**
+with `sort <version> desc, limit 1`, and the version **current as of time T** with
+`where valid_from <= T, sort valid_from desc, limit 1`. Worked example:
+[`examples/versioned_trade/`](../examples/versioned_trade).
+
 ## Choosing
 
 - **Reads reconstruct the whole doc** → canonical `msgpack` (compact) or `map`.

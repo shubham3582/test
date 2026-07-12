@@ -59,6 +59,7 @@ python examples/bond/run_bond.py        # onboard an entity by config, end to en
 | [`fv_paths`](examples/fv_paths) | the cube **at scale** — 3 parts × ~2000 numbers/date: one record per date, parts as bins, max per date |
 | [`library_embed`](examples/library_embed) | the **whole API embedded as a library** — store + state-machine node + journal + retention→Iceberg, no services |
 | [`reject_handling`](examples/reject_handling) | what to do when validation fails — drop / Kafka reject topic / HTTP webhook / a specific message via a hook |
+| [`versioned_trade`](examples/versioned_trade) | append-only **insert-only versioning** — keep every version, read the latest, and find which version was current *as of* a past time |
 All default to the always-available in-memory
 backend (no services); prefix with `PHRONEXUS_BACKEND=aerospike` to run the same
 code against a live Aerospike + Kafka stack.

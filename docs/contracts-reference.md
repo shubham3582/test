@@ -43,8 +43,16 @@ TTL, and Iceberg retention.
 
 ## `query`
 
-Defines searchable fields (backed by the inverted index) and named, parameterised
-query patterns.
+Defines searchable fields and named, parameterised query patterns.
+
+> `searchable` fields are backed by **Phronexus's own inverted index** (posting
+> lists in the `_inv` KV set, maintained on write) — **not** Aerospike native
+> secondary indexes. It's portable across backends and needs no index-build step;
+> see the [README "Search"](../README.md#search-a-self-maintained-inverted-index)
+> section. If you want cluster-managed native SI for a set, create it yourself via
+> the native accessor (`px.native_aerospike().create_index(...)`,
+> [deployment.md](deployment.md#using-native-aerospike-features-directly-supported-api)) —
+> the framework's query engine won't use it, but your own native queries can.
 
 | Field | Type | Notes |
 |---|---|---|

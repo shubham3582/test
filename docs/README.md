@@ -14,6 +14,7 @@
 | [logging.md](logging.md) | The one place to change log format/level/fields for the whole platform (structlog). |
 | [packaging.md](packaging.md) | Build the wheel, consume it as a library (extras matrix), and produce an offline/air-gapped install bundle. |
 | [integration-dishtayantra.md](integration-dishtayantra.md) | Integrating Phronexus into a DishtaYantra DAG as library components. |
+| [product-positioning.md](product-positioning.md) | *Internal strategy note* — positioning, the moat vs. commodity, and a moat/keep-thin/expose-native/cut scope table. |
 
 ## Quick links
 
