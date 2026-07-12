@@ -131,7 +131,7 @@ services:
       PHRONEXUS_KAFKA__ENABLED: "true"
       PHRONEXUS_KAFKA__BOOTSTRAP_SERVERS: redpanda:9092
       PHRONEXUS_KAFKA__SECURITY_PROTOCOL: PLAINTEXT
-      PHRONEXUS_STATEMACHINE__INPUT_TOPICS: '["trades.events", "bonds.events"]'
+      PHRONEXUS_STATEMACHINE__INPUT_TOPICS: '["ccr.trade.events", "ccr.counterparty.events", "ccr.netting.events", "trades.events", "bonds.events"]'
       PHRONEXUS_STATEMACHINE__DLQ_TOPIC: kafka://phronexus.dlq
       PHRONEXUS_STATEMACHINE__REQUIRE_ATOMIC: "false"  # CE best-effort mode
     command: ["python", "-m", "phronexus.statemachine.runner"]
