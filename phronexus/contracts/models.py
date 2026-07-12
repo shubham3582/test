@@ -39,6 +39,7 @@ class ContractKind(str, Enum):
     transition = "transition"
     validation = "validation"
     stream = "stream"
+    ingress = "ingress"
 
 
 class _Base(BaseModel):
@@ -290,6 +291,30 @@ class ViewContract(_Base):
 class EmitSpec(_Base):
     topic: str                       # output destination, e.g. "kafka://trades.booked"
     type: Optional[str] = None       # output event type; defaults to the transition's `on`
+    # Shape the outbound payload from SPECIFIC fields of the candidate document
+    # (instead of emitting the whole document). Defaults reproduce the full doc,
+    # so existing contracts are unchanged. Order: allow-list ``fields`` -> apply
+    # per-field ``transform`` (same registry as views) -> ``rename`` to output keys.
+    # The shaped payload is then validated against the entity's stream schema.
+    fields: list[str] = Field(default_factory=lambda: ["*"])   # ["*"] = whole document
+    rename: dict[str, str] = Field(default_factory=dict)       # source field -> output key
+    transform: dict[str, str] = Field(default_factory=dict)    # source field -> transform name
+
+    @property
+    def is_full(self) -> bool:
+        return self.fields == ["*"]
+
+    @model_validator(mode="after")
+    def _validate_shape(self) -> "EmitSpec":
+        if self.fields != ["*"]:
+            allowed = set(self.fields)
+            for f in self.rename:
+                if f not in allowed:
+                    raise ValueError(f"emit rename field {f!r} must be listed in fields")
+            for f in self.transform:
+                if f not in allowed:
+                    raise ValueError(f"emit transform field {f!r} must be listed in fields")
+        return self
 
 
 class Transition(_Base):
@@ -431,3 +456,31 @@ class StreamContract(_Base):
 
     def identity(self) -> str:
         return f"stream:{self.entity}:v{self.version}"
+
+
+# --- ingress contract (JSON Schema on INBOUND messages, per event type) --------
+
+class IngressContract(_Base):
+    """Registers a JSON Schema per INBOUND event type for an entity.
+
+    The mirror image of :class:`StreamContract`: it validates messages *arriving*
+    at the state machine (before the transition runs) rather than events being
+    published. A message that fails is rejected at the ingress boundary — the
+    runner dead-letters it — so a malformed inbound message never mutates state.
+    An event type with no registered schema passes (opt-in per type).
+    """
+
+    kind: Literal[ContractKind.ingress] = ContractKind.ingress
+    entity: str
+    version: int
+    mode: ValidationMode = ValidationMode.enforce
+    events: list[EventSchema]
+
+    def schema_for(self, event_type: str) -> Optional[dict[str, Any]]:
+        for e in self.events:
+            if e.type == event_type:
+                return e.json_schema
+        return None
+
+    def identity(self) -> str:
+        return f"ingress:{self.entity}:v{self.version}"

@@ -172,7 +172,7 @@ const VIEWS = [['contracts','Contracts'],['validate','Document Validator'],['sm'
   ['changes','Change Requests','governance:read'],['fleet','Fleet','governance:read'],['history','History','governance:read'],
   ['backfill','Backfill','governance:read'],['promotion','Promotion','contract:promote'],['evidence','Evidence','evidence:export'],
   ['lineage','Lineage','governance:read']];
-const KINDS = ['storage','query','view','validation','transition','stream'];
+const KINDS = ['storage','query','view','validation','transition','stream','ingress'];
 
 const TEMPLATES = {
   storage: {kind:'storage', entity:'myentity', version:1, primary_key:['id'], manifest_set:'myentity_manifest',
@@ -187,9 +187,15 @@ const TEMPLATES = {
     json_schema:{type:'object', required:['id'], properties:{id:{type:'string'}}},
     dq_checks:[{name:'id_present', field:'id', required:true, severity:'error'}]},
   transition: {kind:'transition', entity:'myentity', version:1, state_field:'status',
-    transitions:[{event:'Created', from:null, to:'active', emit:[{topic:'kafka://myentity.active'}]}]},
+    transitions:[{event:'Created', from:null, to:'active', emit:[{
+      topic:'kafka://myentity.active', type:'Activated',
+      // Shape the outbound payload from specific fields (omit to emit the whole doc):
+      fields:['id','name','status'], rename:{id:'entity_id'}, transform:{name:'upper'}}]}]},
   stream: {kind:'stream', entity:'myentity', version:1, mode:'enforce',
-    events:[{type:'Created', json_schema:{type:'object', required:['id']}}]},
+    events:[{type:'Activated', json_schema:{type:'object', required:['entity_id','status']}}]},
+  ingress: {kind:'ingress', entity:'myentity', version:1, mode:'enforce',
+    events:[{type:'Created', json_schema:{type:'object', required:['id','name'],
+      properties:{id:{type:'string'}, name:{type:'string'}}, additionalProperties:true}}]},
 };
 
 // ---- auth + api ----

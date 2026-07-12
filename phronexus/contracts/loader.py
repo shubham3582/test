@@ -10,6 +10,7 @@ from pydantic import ValidationError as PydanticValidationError
 
 from phronexus.contracts.models import (
     ContractKind,
+    IngressContract,
     QueryContract,
     StorageContract,
     StreamContract,
@@ -26,11 +27,12 @@ _MODEL_BY_KIND = {
     ContractKind.transition.value: TransitionContract,
     ContractKind.validation.value: ValidationContract,
     ContractKind.stream.value: StreamContract,
+    ContractKind.ingress.value: IngressContract,
 }
 
 Contract = (
     StorageContract | QueryContract | ViewContract | TransitionContract
-    | ValidationContract | StreamContract
+    | ValidationContract | StreamContract | IngressContract
 )
 
 

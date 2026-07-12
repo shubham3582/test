@@ -18,7 +18,6 @@ Login (local password auth, RBAC via JWT):
 from __future__ import annotations
 
 import sys
-import time
 from pathlib import Path
 
 _CCR = Path(__file__).resolve().parent.parent / "examples" / "ccr"
@@ -70,10 +69,22 @@ def _settings() -> Settings:
     return s
 
 
+_INGRESS = {
+    "kind": "ingress", "entity": "ccr_trade", "version": 1, "mode": "enforce",
+    "events": [{"type": "TradeReceived", "json_schema": {
+        "type": "object",
+        "required": ["trade_id", "counterparty", "netting_set_id", "notional", "currency"],
+        "properties": {"notional": {"type": "number", "exclusiveMinimum": 0}},
+        "additionalProperties": True}}],
+}
+
+
 def _run_flow(px: Phronexus) -> None:
     """Produce explorable CCR data centered on trade CCR-T-1."""
     px.load_contract_dir(str(_CCR / "contracts"))
+    px.publish_contract(_INGRESS)     # validate inbound TradeReceived messages
     px.governance.set_cob("ops", COB)
+    px.settings.statemachine.dlq_topic = "kafka://ccr.dlq"
     sm = px.state_machine(output=MemoryOutputPublisher())
 
     # Reference data + netting set.
@@ -126,10 +137,22 @@ def _run_flow(px: Phronexus) -> None:
     px.governance.publish("admin", cr["id"])
     BackfillJob(px).run("ccr_trade")
 
+    # Inbound validation demo: a malformed TradeReceived (missing notional) is
+    # rejected at the ingress boundary and dead-lettered — never touches state.
+    bad_in = InputEvent(entity="ccr_trade", event_type="TradeReceived", key="CCR-BAD",
+                        payload={"trade_id": "CCR-BAD", "counterparty": "GS",
+                                 "netting_set_id": "NS-GS-USD", "currency": "USD"},
+                        event_id="ingress-reject-1")
+    res = sm.process(bad_in)
+    if res.status == "rejected":
+        sm.dead_letter(bad_in, res)
+
     lin = px.lineage(TRADE_ID)
     print(f"[ccr-demo] seeded trade {TRADE_ID}: status={lin['source']['trade']['status']} "
           f"exposure={lin['exposure_result']['exposure']:,.0f} "
           f"cube_points={lin['cube']['point_count']} saga_steps={len(lin['saga'])}", flush=True)
+    print(f"[ccr-demo] inbound reject demo -> event 'ingress-reject-1': {res.status} "
+          f"({res.reason})", flush=True)
 
 
 def build_app():

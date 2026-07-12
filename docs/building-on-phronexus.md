@@ -148,10 +148,30 @@ entity: bond
 version: 1
 state_field: status
 transitions:
-  - {event: BondIssued,  from: null,   to: active,  emit: [{topic: "kafka://bonds.active"}]}
+  - {event: BondIssued,  from: null,   to: active,
+     emit: [{topic: "kafka://bonds.active", type: BondActivated,
+             fields: [isin, issuer, status],           # SHAPE: only these fields
+             transform: {issuer: upper}}]}             # (rename: {src: out} also available)
   - {event: BondCalled,  from: active, to: called,  guard: "callable == True",
-     emit: [{topic: "kafka://bonds.called"}]}
+     emit: [{topic: "kafka://bonds.called"}]}          # (omit fields -> whole doc)
   - {event: BondMatured, from: active, to: matured, emit: [{topic: "kafka://bonds.matured"}]}
+```
+
+Optionally add an `ingress` contract to validate the *inbound* messages before
+they drive a transition (rejected messages are dead-lettered, never applied):
+
+```yaml
+# examples/bond/bond.ingress.yaml
+kind: ingress
+entity: bond
+version: 1
+mode: enforce
+events:
+  - type: BondIssued
+    json_schema:
+      type: object
+      required: [isin, issuer, maturity_date]
+      additionalProperties: true
 ```
 
 ### 6. Use it — no bond-specific code

@@ -136,6 +136,26 @@ class Validator:
             return ValidationReport(ok=True, warnings=errors)
         return ValidationReport(ok=not errors, errors=errors)
 
+    def validate_inbound(self, entity: str, event_type: str, payload: dict[str, Any]) -> ValidationReport:
+        """Validate an INBOUND message payload against its ingress JSON Schema.
+
+        The mirror of :meth:`validate_event` for the ingress side. No ingress
+        contract, or no schema registered for ``event_type``, means "nothing to
+        validate" (opt-in per type). ``warn_only`` never blocks."""
+        try:
+            ic = self._registry.active_ingress(entity)
+        except ContractNotFound:
+            return ValidationReport(ok=True)
+        if ic.mode == ValidationMode.off:
+            return ValidationReport(ok=True)
+        schema = ic.schema_for(event_type)
+        if schema is None:
+            return ValidationReport(ok=True)
+        errors = [f"inbound {event_type}: {e}" for e in self._schema_errors(schema, payload)]
+        if ic.mode == ValidationMode.warn_only:
+            return ValidationReport(ok=True, warnings=errors)
+        return ValidationReport(ok=not errors, errors=errors)
+
     # --- internals ------------------------------------------------------
 
     def _compiled(self, schema: dict[str, Any]):

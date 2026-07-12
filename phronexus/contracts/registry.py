@@ -20,6 +20,7 @@ import structlog
 
 from phronexus.contracts.loader import Contract, parse_contract
 from phronexus.contracts.models import (
+    IngressContract,
     QueryContract,
     StorageContract,
     StreamContract,
@@ -218,6 +219,9 @@ class ContractRegistry:
 
     def active_stream(self, entity: str) -> StreamContract:
         return self._active_of("stream", entity)  # type: ignore[return-value]
+
+    def active_ingress(self, entity: str) -> IngressContract:
+        return self._active_of("ingress", entity)  # type: ignore[return-value]
 
     def get_version(self, identity: str) -> Contract:
         self._maybe_refresh()

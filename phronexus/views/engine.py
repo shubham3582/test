@@ -28,6 +28,14 @@ def register_transform(name: str, fn: Transform) -> None:
     _TRANSFORMS[name] = fn
 
 
+def get_transform(name: str) -> Transform:
+    """Look up a registered transform by name (shared by views and emit shaping)."""
+    fn = _TRANSFORMS.get(name)
+    if fn is None:
+        raise ViewError(f"unknown transform {name!r}")
+    return fn
+
+
 class ViewEngine:
     def __init__(self, registry: ContractRegistry):
         self._registry = registry

@@ -1,0 +1,17 @@
+# Inbound-message JSON Schema (validated at the ingress boundary, before the
+# transition runs). A message that fails is rejected and dead-lettered — it never
+# drives a state change. Mirror image of bond.stream.yaml (which guards outputs).
+kind: ingress
+entity: bond
+version: 1
+mode: enforce                 # enforce | warn_only | off
+events:
+  - type: BondIssued
+    json_schema:
+      type: object
+      required: [isin, issuer, maturity_date]
+      properties:
+        isin: {type: string, minLength: 12}
+        issuer: {type: string}
+        maturity_date: {type: integer}
+      additionalProperties: true

@@ -22,6 +22,7 @@ from phronexus.errors import (
     TransitionRejected,
     ValidationError,
 )
+from phronexus.statemachine.emit import build_emit_payload
 from phronexus.statemachine.guard import safe_eval
 from phronexus.statemachine.hooks import TransitionContext
 from phronexus.statemachine.io import MemoryOutputPublisher, OutputPublisher
@@ -103,6 +104,20 @@ class StateMachine:
                     self._px.telemetry.incr("phronexus.sm.dropped", entity=event.entity if event else "?")
                     return ProcessResult(status="dropped", reason="dropped by hook")
 
+            # 2.5) INBOUND schema validation — check the arriving message against
+            #      its ingress JSON Schema before it can touch state. A failure is
+            #      rejected here (the runner dead-letters it), so a malformed
+            #      inbound message never drives a transition. Opt-in per event type.
+            irep = self._px.validator.validate_inbound(event.entity, event.event_type, event.payload)
+            if irep.warnings:
+                log.warning("statemachine.inbound_schema.warnings", warnings=irep.warnings)
+            if not irep.ok:
+                self._px.telemetry.incr("phronexus.sm.rejected", entity=event.entity)
+                return ProcessResult(
+                    status="rejected",
+                    reason="validation (inbound schema): " + "; ".join(irep.errors),
+                )
+
             # 3) Load current state and resolve the transition.
             current = self._manifest.read(event.entity, event.key)
             cur_state = current.get(tc.state_field) if current else None
@@ -139,14 +154,17 @@ class StateMachine:
                     reason=f"guard failed: {tr.guard}",
                 )
 
-            # 4) Build output events and validate them against their stream
+            # 4) Build output events — each payload is SHAPED from the candidate
+            #    document per the emit spec (specific fields / rename / transform;
+            #    default is the whole doc) — then validated against their stream
             #    JSON Schema at produce time (so malformed events are never
             #    published). Failures reject the transition — nothing is committed.
             now = time.time()
             outs = [
                 OutputEvent(
                     topic=em.topic, type=em.type or tr.to, key=event.key,
-                    payload=new_doc, ts=now, cause_event_id=event.event_id,
+                    payload=build_emit_payload(em, new_doc), ts=now,
+                    cause_event_id=event.event_id,
                 )
                 for em in tr.emit
             ]

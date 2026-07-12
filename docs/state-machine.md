@@ -162,11 +162,35 @@ publish failure leaves it queued for retry, never silently dropped.
 loops with exponential backoff on a transient broker/store error (it doesn't
 crash) and shuts down gracefully on SIGTERM (drain, then commit offsets).
 
+### Inbound message validation
+
+An `ingress` contract registers a JSON Schema **per inbound event type**. Right
+after dedup (before the transition is even resolved), the arriving message is
+validated against its schema; under `enforce` a failure **rejects the message**
+at the boundary — nothing touches state — and the runner dead-letters it. An
+event type with no registered schema passes (opt-in per type). This is a second,
+semantic line of defence in front of the transport-layer poison quarantine
+(structurally-undecodable bytes are already routed aside in `KafkaInputSource`,
+so one bad message can't wedge a partition).
+
+So a message runs a two-stage gauntlet: **decode** (transport; poison → DLQ) →
+**`ingress` schema** (this) → transition/guard → **`stream` schema** (produce
+time) → commit.
+
+### Outbound message shaping (produce-time)
+
+An emit does not have to send the whole document. An `EmitSpec` can build the
+outbound payload from **specific fields** of the candidate document —
+`fields` (allow-list) → `transform` → `rename` — so a consumer gets exactly the
+inputs it needs. The shaped payload is what the `stream` schema validates and what
+is published. See the `stream`/`transition` sections in
+[contracts-reference.md](contracts-reference.md#transition).
+
 **Event-schema validation (produce-time).** A `stream` contract registers a JSON
-Schema per emitted event type. Before the commit, each output event's payload is
-validated against its schema; under `enforce` a failure **rejects the transition**
-(nothing committed, nothing published), so malformed events never reach the wire
-— a schema-registry substitute without an external registry.
+Schema per emitted event type. Before the commit, each output event's (shaped)
+payload is validated against its schema; under `enforce` a failure **rejects the
+transition** (nothing committed, nothing published), so malformed events never
+reach the wire — a schema-registry substitute without an external registry.
 
 ## What it reuses vs. adds
 

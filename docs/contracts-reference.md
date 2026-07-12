@@ -202,7 +202,35 @@ Defines the entity lifecycle as a state machine.
 | `from` | string \| `null` \| `"*"` | source state; `null` = creation, `"*"` = any |
 | `to` | string | target state written into `state_field` |
 | `guard` | string | sandboxed boolean expression; must pass to proceed |
-| `emit` | `[{topic, type}]` | output events; `topic` is a URI (see routing) |
+| `emit` | `[EmitSpec]` | output events; `topic` is a URI (see routing) |
+
+**EmitSpec** — an output event, optionally **shaped** from specific fields of the
+candidate document (instead of emitting the whole document):
+
+| Field | Type | Notes |
+|---|---|---|
+| `topic` | string | destination URI (routing below) |
+| `type` | string | output event type; defaults to the transition's `to` |
+| `fields` | `[string]` | allow-list of source fields to include; `["*"]` (default) = whole document |
+| `rename` | `{src: out}` | rename a source field to a different output key |
+| `transform` | `{src: name}` | apply a registered transform (`round2`, `upper`, `lower`, `abs`, or your own via `register_transform`) |
+
+Order: allow-list `fields` → per-field `transform` → `rename` to output keys. The
+**shaped** payload is what gets validated against the `stream` schema and
+published — so you build a message with exactly the inputs a consumer needs and
+nothing more:
+
+```yaml
+emit:
+  - topic: kafka://trade.activated
+    type: TradeActivated
+    fields: [trade_id, counterparty, notional, status]   # drop internal fields
+    rename: {trade_id: id}                                # id for the consumer
+    transform: {counterparty: upper}
+```
+
+Omitting `fields`/`rename`/`transform` reproduces the whole document (existing
+contracts are unchanged).
 
 **Emit routing** by `topic` scheme: `kafka://…` → Kafka/MSK, `http(s)://…` →
 HTTP POST (TLS/mTLS), `null://` or empty `emit` → consumer-only (no output).
@@ -236,6 +264,46 @@ events:
 An emitted event whose payload fails its schema rejects the transition (nothing
 committed, nothing published) under `enforce`; `px.validate_event(entity, type,
 payload)` runs the same check standalone.
+
+---
+
+## `ingress`
+
+The mirror image of `stream`: a **JSON Schema per INBOUND event type**, validated
+at the state-machine boundary **before a transition runs**. A message that fails
+is rejected at ingress (nothing touches state) and the runner **dead-letters** it.
+This catches semantically-invalid-but-decodable messages early — the transport
+layer already quarantines structurally-broken bytes (see
+[state-machine.md](state-machine.md#inbound-message-validation)).
+
+| Field | Type | Notes |
+|---|---|---|
+| `mode` | `enforce` \| `warn_only` \| `off` | enforce rejects; warn logs but proceeds |
+| `events` | `[{type, json_schema}]` | `type` matches the inbound `event_type` |
+
+```yaml
+kind: ingress
+entity: trade
+version: 1
+mode: enforce
+events:
+  - type: TradeReceived
+    json_schema:
+      type: object
+      required: [trade_id, counterparty, notional, currency]
+      properties:
+        notional: {type: number, exclusiveMinimum: 0}
+      additionalProperties: true
+```
+
+An event type with **no** registered schema passes (opt-in per type).
+`px.validate_inbound(entity, type, payload)` runs the same check standalone.
+
+> **`ingress` vs `validation`.** `ingress` validates the *raw inbound message* at
+> the ingress boundary (per inbound event type). `validation` validates the
+> *resulting document* at the write boundary (JSON Schema + DQ checks, after the
+> event is merged into state). Use `ingress` to reject bad messages early; use
+> `validation` to guarantee stored documents are well-formed.
 
 ---
 

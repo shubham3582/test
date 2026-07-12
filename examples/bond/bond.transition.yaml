@@ -8,7 +8,10 @@ transitions:
     from: null
     to: active
     emit:
-      - {topic: "kafka://bonds.active", type: BondActivated}
+      # Shape the outbound message from specific fields (drops coupon/currency/etc.);
+      # uppercase the issuer. The shaped payload is validated against bond.stream.yaml.
+      - {topic: "kafka://bonds.active", type: BondActivated,
+         fields: [isin, issuer, status], transform: {issuer: upper}}
   - event: BondCalled
     from: active
     to: called

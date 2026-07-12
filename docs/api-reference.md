@@ -35,7 +35,8 @@ px = Phronexus(Settings())          # backend/kafka/iceberg from env or ./config
 ### Read / query
 | Verb | Does |
 |---|---|
-| `get(entity, doc_id) -> doc?` | read one by id |
+| `get(entity, doc_id, *, validate=False) -> doc?` | read one by id; `validate=True` re-checks against the JSON Schema version the doc was written under |
+| `schema(entity, *, version=None) -> {version, mode, json_schema, dq_checks}` | fetch the versioned JSON Schema for an entity (schema-registry surface) |
 | `get_many(entity, [doc_ids]) -> {id: doc}` | **batch** read by id (one round-trip per set) |
 | `find(entity, field, value) -> [doc]` | inverted-index lookup → PKs → **batch** read (e.g. all trades for a counterparty) |
 | `query(querydoc\|dict) -> [doc]` | predicate query (`where`, `sort`, `limit`, `offset`) |
@@ -49,7 +50,8 @@ px = Phronexus(Settings())          # backend/kafka/iceberg from env or ./config
 | Verb | Does |
 |---|---|
 | `validate(entity, document) -> ValidationReport` | JSON Schema + DQ, no write (`.ok`, `.errors`, `.warnings`) |
-| `validate_event(entity, event_type, payload) -> ValidationReport` | validate an outbound event vs its stream schema |
+| `validate_event(entity, event_type, payload) -> ValidationReport` | validate an **outbound** event vs its `stream` schema |
+| `validate_inbound(entity, event_type, payload) -> ValidationReport` | validate an **inbound** message vs its `ingress` schema (via `px.validator`) |
 
 ### Engines & journals
 | Verb | Does |
