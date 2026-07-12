@@ -1,0 +1,31 @@
+# Counterparty onboarding saga. A new counterparty is received, goes through
+# review (KYC/credit — done by external services that reply with events), and
+# becomes active. Only then should trades against it price/clear (the trade DQ
+# checks existence; a hook can additionally require status == active).
+kind: transition
+entity: counterparty
+version: 1
+state_field: status
+inputs: ["kafka://ccr.counterparty.events"]
+transitions:
+  - event: CounterpartyReceived
+    from: null
+    to: pending_review
+    emit:
+      - {topic: "kafka://kyc.requests", type: RequestReview}
+
+  - event: ReviewApproved
+    from: pending_review
+    to: active
+    emit:
+      - {topic: "kafka://ccr.reference.updates", type: CounterpartyActivated}
+
+  - event: ReviewRejected
+    from: pending_review
+    to: rejected
+
+  - event: CounterpartySuspended
+    from: active
+    to: suspended
+    emit:
+      - {topic: "kafka://ccr.reference.updates", type: CounterpartySuspended}

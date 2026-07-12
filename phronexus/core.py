@@ -230,6 +230,15 @@ class Phronexus:
         doc_ids = self.index.lookup_eq(entity, field, value)
         return list(self.get_many(entity, doc_ids).values())
 
+    def lineage(self, trade_id: str, *, entity: str = "ccr_trade",
+                as_of: Optional[int] = None) -> dict[str, Any]:
+        """End-to-end lineage for a trade: source event → saga → cube → exposure.
+        Read-only; correlates the audit trace, interactions, cube points, and the
+        (bitemporal) exposure result the framework already records."""
+        from phronexus.lineage import build_lineage
+
+        return build_lineage(self, trade_id, entity=entity, as_of=as_of)
+
     def trace(self, entity: str, doc_id: str) -> list[dict[str, Any]]:
         """Return the audit trail for one document — every commit/delete with its
         state, oldest first, with transitions derived. Populated by the audit

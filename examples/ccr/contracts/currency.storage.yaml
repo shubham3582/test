@@ -1,0 +1,19 @@
+# Currency reference data. Doc id = code (e.g. "USD"). The trade's DQ
+# `references: currency` resolves the trade currency against this manifest.
+# Evolvable: adding a supported currency (a new doc) or a new field (e.g. a
+# tiering flag) rides the governed change workflow + backfill.
+kind: storage
+entity: currency
+version: 1
+primary_key: [code]
+manifest_set: ccy_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: main
+    set: ccy_ref
+    key: "{code}"
+    fields: ["*"]
+    canonical: true
+iceberg:
+  enabled: false

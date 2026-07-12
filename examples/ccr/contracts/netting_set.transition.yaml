@@ -1,0 +1,29 @@
+# Netting-set lifecycle. A set is opened under a CSA, activated once collateral
+# terms are in place, amended when terms change, and closed when wound down.
+kind: transition
+entity: netting_set
+version: 1
+state_field: status
+inputs: ["kafka://ccr.netting.events"]
+transitions:
+  - event: NettingSetOpened
+    from: null
+    to: open
+    emit:
+      - {topic: "kafka://ccr.reference.updates", type: NettingSetOpened}
+
+  - event: CsaConfirmed
+    from: open
+    to: active
+
+  - event: NettingSetAmended
+    from: active
+    to: active
+    emit:
+      - {topic: "kafka://ccr.reference.updates", type: NettingSetAmended}
+
+  - event: NettingSetClosed
+    from: "*"
+    to: closed
+    emit:
+      - {topic: "kafka://ccr.reference.updates", type: NettingSetClosed}

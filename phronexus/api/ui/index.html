@@ -170,7 +170,8 @@ function toggleTheme(){ applyTheme((document.documentElement.getAttribute('data-
 (function(){ let t='light'; try{ t=localStorage.getItem('phx-theme')||'light'; }catch(e){} applyTheme(t); })();
 const VIEWS = [['contracts','Contracts'],['validate','Document Validator'],['sm','State Machine'],['data','Data Browser'],['trace','Trace'],
   ['changes','Change Requests','governance:read'],['fleet','Fleet','governance:read'],['history','History','governance:read'],
-  ['backfill','Backfill','governance:read'],['promotion','Promotion','contract:promote'],['evidence','Evidence','evidence:export']];
+  ['backfill','Backfill','governance:read'],['promotion','Promotion','contract:promote'],['evidence','Evidence','evidence:export'],
+  ['lineage','Lineage','governance:read']];
 const KINDS = ['storage','query','view','validation','transition','stream'];
 
 const TEMPLATES = {
@@ -227,7 +228,7 @@ async function showApp() {
     b.className = S.view===id?'active':''; b.onclick=()=>{ S.view=id; showApp(); }; nav.appendChild(b); });
   ({contracts:renderContracts, validate:renderValidate, sm:renderSM, data:renderData, trace:renderTrace,
     changes:renderChanges, fleet:renderFleet, history:renderHistory, backfill:renderBackfill,
-    promotion:renderPromotion, evidence:renderEvidence}[S.view])();
+    promotion:renderPromotion, evidence:renderEvidence, lineage:renderLineage}[S.view])();
 }
 
 // ---- Contracts ----
@@ -710,6 +711,40 @@ async function evExport(){
 }
 function _download(name, obj){ const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
   const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; a.click(); URL.revokeObjectURL(a.href); }
+
+// ---- CCR: Lineage ----
+async function renderLineage(){
+  document.getElementById('main').innerHTML=`<h2>Lineage</h2>
+    <div class="sub">Source event → saga → cube inputs → exposure result, for one trade.</div>
+    <div class="card"><div class="row"><div><label>Entity</label><input id="lnEntity" value="ccr_trade"></div>
+      <div><label>Trade id</label><input id="lnId" placeholder="CCR-T-1"></div></div>
+      <div class="toolbar"><button class="primary" onclick="lnGo()">Trace lineage</button></div></div>
+    <div id="lnOut"></div>`;
+}
+async function lnGo(){
+  const e=document.getElementById('lnEntity').value||'ccr_trade';
+  const id=document.getElementById('lnId').value.trim();
+  const out=document.getElementById('lnOut');
+  try{
+    const l=await api('/entities/'+encodeURIComponent(e)+'/documents/'+encodeURIComponent(id)+'/lineage');
+    const saga=(l.saga||[]).map(s=>`<div class="trow"><span class="tdot"></span><span class="tver">${escapeHtml(String(s.state||s.kind||s.op||''))}</span> <span class="muted">${escapeHtml(String(s.txn_id||s.txn||''))}</span><div class="ttxn">${new Date((s.ts||0)*1000).toLocaleString()}</div></div>`).join('');
+    const inter=(l.interactions||[]).map(i=>`<tr><td>${escapeHtml(String(i.type||''))}</td><td><span class="pill">${escapeHtml(String(i.status||''))}</span></td><td>${escapeHtml(String(i.event_id||''))}</td></tr>`).join('');
+    const exp=l.exposure_result?`${l.exposure_result.exposure} ${escapeHtml(String(l.exposure_result.currency||''))}`:'—';
+    const ns=l.ns_exposure?`${l.ns_exposure.exposure}`:'—';
+    out.innerHTML=`<div class="cols">
+      <div class="card"><h3>Source → result</h3><div class="smdetail">
+        <div class="kv"><span class="k">Trade</span><span class="v">${escapeHtml(l.trade_id)} <span class="badge ok">${escapeHtml(String(l.source&&l.source.trade&&l.source.trade.status||'?'))}</span></span></div>
+        <div class="kv"><span class="k">Netting set</span><span class="v">${escapeHtml(String(l.source&&l.source.netting_set_id||'—'))}</span></div>
+        <div class="kv"><span class="k">As-of COB</span><span class="v">${l.as_of==null?'—':l.as_of}</span></div>
+        <div class="kv"><span class="k">Cube inputs</span><span class="v">${(l.cube&&l.cube.point_count)||0} points ${escapeHtml(((l.cube&&l.cube.scenarios)||[]).join(', '))}</span></div>
+        <div class="kv"><span class="k">Exposure</span><span class="v">${exp}</span></div>
+        <div class="kv"><span class="k">Netting exposure</span><span class="v">${ns}</span></div></div>
+        <label>Producing contract versions</label><div class="result">${escapeHtml(JSON.stringify(l.contract_versions||{}))}</div></div>
+      <div class="card"><h3>Saga timeline</h3><div class="trace">${saga||'<div class="muted">no audit yet</div>'}</div>
+        <h3>Interactions</h3><table><tr><th>Type</th><th>Status</th><th>Event id</th></tr>${inter||'<tr><td colspan="3" class="muted">none (enable request journaling)</td></tr>'}</table></div>
+    </div>`;
+  }catch(err){ out.innerHTML=res(false,[err.body?.detail||err.message]); }
+}
 
 // ---- helpers ----
 function res(ok, lines){ const b='<span class="badge '+(ok?'ok':'err')+'">'+(ok?'OK':'FAILED')+'</span>';

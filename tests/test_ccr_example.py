@@ -16,19 +16,29 @@ from phronexus.statemachine import InputEvent, MemoryOutputPublisher
 CCR = Path(__file__).resolve().parent.parent / "examples" / "ccr"
 
 
+def seed_reference_data(px: Phronexus) -> None:
+    """Seed the reference entities the trade DQ resolves against."""
+    px.put("counterparty", {"counterparty_id": "GS", "name": "Goldman Sachs",
+                            "jurisdiction": "US", "rating": "A", "status": "active"})
+    px.put("currency", {"code": "USD", "usd_rate": 1.0})
+    px.put("netting_set", {"netting_set_id": "NS-GS-USD", "counterparty": "GS",
+                           "csa_id": "CSA-GS-1", "status": "active"})
+
+
 @pytest.fixture()
 def ccr() -> Phronexus:
     settings = Settings(backend="memory")
     settings.observability.log_level = "WARNING"
     px = Phronexus(settings)
     px.load_contract_dir(str(CCR / "contracts"))
+    seed_reference_data(px)
     yield px
     px.close()
 
 
 TRADE = {
-    "trade_id": "CCR-T-001", "counterparty": "GS", "book": "IRD-1",
-    "product_type": "IRS", "notional": 25_000_000.0, "currency": "USD",
+    "trade_id": "CCR-T-001", "counterparty": "GS", "netting_set_id": "NS-GS-USD",
+    "book": "IRD-1", "product_type": "IRS", "notional": 25_000_000.0, "currency": "USD",
     "trade_date": 20260711, "maturity_date": 20360711,
 }
 

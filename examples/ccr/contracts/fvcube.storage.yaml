@@ -1,0 +1,28 @@
+# Future-value cube stored TRANSPOSED — one record per (trade, scenario) with each
+# future date its own bin. Complements value_cube (point-per-tenor): same numbers,
+# two physical layouts, both driven by the same contract-declared projections.
+#   doc  — canonical clean document (curve as a {date: value} map), msgpack.
+#   wide — `curve` SPREAD so every date becomes bin d<YYYYMMDD> (native per-date reads).
+kind: storage
+entity: fvcube
+version: 1
+primary_key: [trade_id, scenario_id]
+manifest_set: fvcube_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: doc
+    set: fvc_doc
+    key: "{trade_id}:{scenario_id}"
+    fields: ["*"]
+    encoding: msgpack
+    canonical: true
+  - name: wide
+    set: fvc_wide
+    key: "{trade_id}:{scenario_id}"
+    fields: [as_of, currency, curve]
+    encoding: bins
+    spread:
+      - {field: curve, prefix: "d"}
+iceberg:
+  enabled: false

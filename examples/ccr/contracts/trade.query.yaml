@@ -2,7 +2,8 @@ kind: query
 entity: ccr_trade
 version: 1
 searchable:
-  - {field: counterparty, index: string}
+  - {field: counterparty, index: string, name: idx_cp}
+  - {field: netting_set_id, index: string, name: idx_ns}
   - {field: book, index: string}
   - {field: status, index: string}
   - {field: notional, index: numeric}
@@ -10,6 +11,9 @@ patterns:
   - name: by_counterparty
     where:
       - {field: counterparty, op: eq, value: "${counterparty}"}
+  - name: by_netting_set
+    where:
+      - {field: netting_set_id, op: eq, value: "${netting_set_id}"}
   - name: pending_by_counterparty
     where:
       - {field: counterparty, op: eq, value: "${counterparty}"}

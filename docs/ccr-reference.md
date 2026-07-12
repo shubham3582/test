@@ -17,6 +17,32 @@ value cube, and exactly-once scheduler against a live Aerospike + Kafka
 deployment — the saga state and cube then persist across runs, so re-processing
 an already-seen event is a no-op (effectively-once across process restarts).
 
+## Production depth — ten proofs
+
+The goal is **not** to compute risk (the quant engine owns SA-CCR/IMM/XVA); it is
+to prove Phronexus reliably **governs and serves the operational data around** one.
+`run_ccr.py` narrates all ten; each is pinned by a test (`pytest -m ccr`).
+
+| # | Proof | How |
+|---|---|---|
+| CCR1 | Trade & counterparty onboarding | validation + reference-DQ (`counterparty`/`currency`/`netting_set` must resolve) + lifecycle sagas → `active`/`published` |
+| CCR2 | Contract & reference-data evolution | governed `draft→submit→approve→publish` of `ccr_trade` v2 + `BackfillJob` re-projection; a currency added to reference data is then admitted |
+| CCR3 | Netting-set lifecycle | `open→active→amended→closed` saga; trades reference a set (`idx_ns`); a **served** `ns_exposure` aggregate |
+| CCR4 | Intraday recalculation | `RecalcRequested` re-drives the saga → a new `exposure_result` version at the same COB, later tx-time |
+| CCR5 | Cube projection | `value_cube` point-per-tenor (hot sorted/clipped) **and** `fvcube` transposed (dates → `d<YYYYMMDD>` bins) |
+| CCR6 | Late & corrected events | a backdated correction is only visible at/after its tx-time |
+| CCR7 | COB reproducibility | reading an exposure as-of a COB is stable under later writes (bitemporal) |
+| CCR8 | Hot/cold tier movement | retention lands trades/exposures in the warehouse; hot and cold agree; rows expire past their horizon |
+| CCR9 | Lineage | `px.lineage(trade_id)` stitches source event → saga → cube → exposure + producing contract versions (`GET …/lineage`, console **Lineage** view) |
+| CCR10 | Recovery from partial failure | fault harness: torn write is invisible + reaped; broker redelivery doesn't double-request; retention replay lands one cold row |
+
+**The consolidated domain** (`examples/ccr/contracts/`): reference data
+`counterparty` (+ onboarding lifecycle) and `currency`; the `netting_set` lifecycle
+entity; the `ccr_trade` saga (reference-DQ + `idx_cp`/`idx_ns` membership); the
+`value_cube` (point) and `fvcube` (transpose) cubes; and the **bitemporal**
+`exposure_result` (trade-level) + `ns_exposure` (netting-set-level, served
+aggregate). Shared operations live in `examples/ccr/ccr_ops.py`.
+
 ## The problem
 
 Modernise CCR trade processing:

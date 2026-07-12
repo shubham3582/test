@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from phronexus.api.auth import Principal
 from phronexus.api.deps import get_px, require_principal
 from phronexus.api.schemas import (
     BatchWriteRequest,
@@ -64,6 +63,15 @@ def trace(entity: str, doc_id: str, px: Phronexus = Depends(get_px)) -> dict:
     transition for one document, oldest first. Populated by the audit
     change-feed consumer (decoupled from the write path)."""
     return {"entity": entity, "doc_id": doc_id, "events": px.trace(entity, doc_id)}
+
+
+@router.get("/entities/{entity}/documents/{doc_id}/lineage")
+def lineage(entity: str, doc_id: str, as_of: int | None = None,
+            px: Phronexus = Depends(get_px)) -> dict:
+    """End-to-end lineage for a trade: source event → saga steps → cube inputs →
+    exposure result, correlated and ordered. Read-only assembly of the trail the
+    framework already records."""
+    return px.lineage(doc_id, entity=entity, as_of=as_of)
 
 
 @router.get("/interactions/{event_id}")

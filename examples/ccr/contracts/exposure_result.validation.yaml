@@ -1,0 +1,19 @@
+kind: validation
+entity: exposure_result
+version: 1
+mode: enforce
+json_schema:
+  type: object
+  required: [trade_id, cob, exposure, currency]
+  properties:
+    trade_id:        {type: string, minLength: 1}
+    cob:             {type: integer}
+    exposure:        {type: number}
+    cva:             {type: number}
+    pfe:             {type: number}
+    currency:        {type: string, minLength: 3, maxLength: 3}
+    netting_set_id:  {type: string}
+    source_event_id: {type: string}
+  additionalProperties: true
+dq_checks:
+  - {name: exposure_nonneg, expr: "exposure >= 0", severity: error}

@@ -1,0 +1,19 @@
+# Counterparty — reference data WITH an onboarding lifecycle. The trade's DQ
+# `references: counterparty` resolves the trade counterparty against this entity's
+# manifest (doc id = counterparty_id); the onboarding saga (see the transition
+# contract) advances a new counterparty received -> pending_review -> active.
+kind: storage
+entity: counterparty
+version: 1
+primary_key: [counterparty_id]
+manifest_set: cp_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: main
+    set: cp_ref
+    key: "{counterparty_id}"
+    fields: ["*"]
+    canonical: true
+iceberg:
+  enabled: false

@@ -6,10 +6,11 @@ version: 1
 mode: enforce
 json_schema:
   type: object
-  required: [trade_id, counterparty, book, product_type, notional, currency, trade_date, maturity_date]
+  required: [trade_id, counterparty, netting_set_id, book, product_type, notional, currency, trade_date, maturity_date]
   properties:
     trade_id: {type: string, minLength: 1}
     counterparty: {type: string, minLength: 1}
+    netting_set_id: {type: string, minLength: 1}
     book: {type: string, minLength: 1}
     product_type: {type: string, enum: [IRS, FXFWD, SWAPTION, REPO, CDS]}
     notional: {type: number}
@@ -22,4 +23,11 @@ dq_checks:
   - {name: notional_positive, expr: "notional > 0", severity: error}
   - {name: ccy_supported, field: currency, in: [USD, EUR, GBP, JPY, CHF], severity: error}
   - {name: matures_after_trade, expr: "maturity_date > trade_date", severity: error}
-  - {name: trade_id_unique, field: trade_id, unique: true, severity: error}
+  # Reference-data existence (resolves against seeded reference entities): a trade
+  # cannot onboard against an unknown counterparty, currency, or netting set.
+  - {name: counterparty_known, field: counterparty, references: counterparty, severity: error,
+     message: "counterparty is not onboarded in the counterparty reference data"}
+  - {name: currency_known, field: currency, references: currency, severity: error,
+     message: "currency is not in the currency reference data"}
+  - {name: netting_set_known, field: netting_set_id, references: netting_set, severity: error,
+     message: "netting_set_id does not resolve to a known netting set"}

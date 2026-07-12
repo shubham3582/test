@@ -1,0 +1,22 @@
+# Trade-level exposure result — the COB-reproducible artifact the calculator
+# publishes back. BITEMPORAL: each write is an immutable version stamped with a
+# valid-time (cob, the business/processing date) and a transaction-time (system
+# time). An intraday recalc or a late correction is just another append; reading
+# as-of a (cob, tx-time) is reproducible. Carries source_event_id for lineage.
+kind: storage
+entity: exposure_result
+version: 1
+primary_key: [trade_id]
+manifest_set: exposure_manifest
+temporal: bitemporal
+valid_time_field: cob
+projections:
+  - name: main
+    set: exposure_main
+    key: "{trade_id}"
+    fields: ["*"]
+    canonical: true
+iceberg:
+  enabled: true
+  table: warehouse.exposures
+  retention_days: 3650

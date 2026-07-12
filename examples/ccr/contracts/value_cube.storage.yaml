@@ -21,4 +21,7 @@ projections:
     key: "{trade_id}:{tenor}:{scenario_id}"
     fields: [trade_id, scenario_id, tenor, value, currency, as_of]
 iceberg:
-  enabled: false
+  enabled: true
+  table: warehouse.value_cube
+  partition_by: [as_of]
+  retention_days: 30

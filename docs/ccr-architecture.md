@@ -94,17 +94,26 @@ flowchart TB
 5. **Orchestrate in a real engine.** Simple per-entity flow → Phronexus saga/scheduler;
    complex fan-out DAG → DishtaYantra/Temporal, with Phronexus as the data plane.
 
-## Three decisions to close before "production-ready"
+## Three decisions — now closed (Stage 3)
 
-1. **The engine contract.** The exact request/response shape between the calculator and
-   the store (inputs pulled, results written, versioning). Make it a `stream`/storage
-   contract, not tribal knowledge.
-2. **The netting/aggregation boundary.** Does Phronexus store *raw per-trade cubes*
-   (engine nets/aggregates) or *pre-aggregated netting-set exposures*? Decide explicitly;
-   netting + collateral must not leak half into the query layer.
-3. **Cube scale & tiering.** Real cubes are counterparties × netting sets × trades ×
-   time × 2k–50k paths. Likely answer: **aggregates hot, full cubes cold** — but size it
-   with real volumes and set the Aerospike/Iceberg tiering policy deliberately.
+1. **The engine contract — CLOSED.** The calculator's inputs and results are explicit
+   contracts: `value_cube`/`fvcube` (inputs it reads) and the bitemporal
+   `exposure_result` (results it writes), advanced by the `ccr_trade` saga
+   (`TradeReceived → CubeReady → CalcComplete`, plus `RecalcRequested` intraday). No
+   tribal knowledge — it is config.
+2. **The netting/aggregation boundary — CLOSED.** Phronexus stores raw per-trade
+   `exposure_result` **and serves** a netting-set aggregate (`ns_exposure`). The
+   aggregation is a thin, explicit sum over the `idx_ns` membership index
+   (`examples/ccr/ccr_ops.py::aggregate_netting_set`); the real netting/XVA maths stays
+   in the engine. The boundary is a contract, not a leak.
+3. **Cube scale & tiering — CLOSED.** Aggregates and current state are hot (Aerospike);
+   full history moves cold to Iceberg via retention (`ccr_trade`, `value_cube`,
+   `exposure_result`, `ns_exposure` are all `iceberg.enabled`, each with its own
+   `retention_days` horizon). The point cube (`value_cube`) and the transposed cube
+   (`fvcube`, dates-as-bins) coexist for fast per-tenor and per-date reads.
+
+Everything above is proven end to end by `examples/ccr/run_ccr.py` and the ten CCR
+proofs in `tests/test_ccr_*.py` (`pytest -m ccr`).
 
 ## Bottom line
 

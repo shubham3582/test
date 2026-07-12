@@ -1,0 +1,26 @@
+# Netting set — the CSA-governed aggregation boundary. Trades belong to a netting
+# set (trade.netting_set_id); exposure nets within the set. This is a governed
+# lifecycle entity: open -> active -> amended -> closed (see the transition
+# contract). Phronexus stores/serves the set and its membership; the quant engine
+# owns the netting maths.
+kind: storage
+entity: netting_set
+version: 1
+primary_key: [netting_set_id]
+manifest_set: ns_manifest
+update_policy: upsert
+delete_policy: soft
+projections:
+  - name: main
+    set: ns_main
+    key: "{netting_set_id}"
+    fields: ["*"]
+    canonical: true
+  - name: by_counterparty
+    set: ns_by_cpty
+    key: "{counterparty}:{netting_set_id}"
+    fields: [netting_set_id, counterparty, csa_id, status]
+iceberg:
+  enabled: true
+  table: warehouse.netting_sets
+  retention_days: 3650

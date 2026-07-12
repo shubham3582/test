@@ -1,0 +1,21 @@
+# Netting-set-level exposure — the SERVED aggregation. Phronexus stores and serves
+# the netting-set net exposure (a thin demo sum of member-trade exposures; the
+# real netting maths belongs to the quant engine). Bitemporal, so an NS exposure
+# is reproducible as-of any COB and re-aggregates on an intraday recalc.
+kind: storage
+entity: ns_exposure
+version: 1
+primary_key: [netting_set_id]
+manifest_set: ns_exposure_manifest
+temporal: bitemporal
+valid_time_field: cob
+projections:
+  - name: main
+    set: ns_exposure_main
+    key: "{netting_set_id}"
+    fields: ["*"]
+    canonical: true
+iceberg:
+  enabled: true
+  table: warehouse.ns_exposures
+  retention_days: 3650

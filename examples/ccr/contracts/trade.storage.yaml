@@ -23,6 +23,11 @@ projections:
     set: ccr_trade_by_book
     key: "{book}:{trade_id}"
     fields: [trade_id, book, counterparty, notional, status]
+  # Membership: list all trades in a netting set (drives the served aggregation).
+  - name: by_netting_set
+    set: ccr_trade_by_ns
+    key: "{netting_set_id}:{trade_id}"
+    fields: [trade_id, netting_set_id, counterparty, notional, currency, status]
 iceberg:
   enabled: true
   table: warehouse.ccr_trades

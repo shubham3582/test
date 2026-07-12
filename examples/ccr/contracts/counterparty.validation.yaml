@@ -1,0 +1,16 @@
+kind: validation
+entity: counterparty
+version: 1
+mode: enforce
+json_schema:
+  type: object
+  required: [counterparty_id, name, jurisdiction, rating]
+  properties:
+    counterparty_id: {type: string, minLength: 2}
+    name:            {type: string, minLength: 1}
+    jurisdiction:    {type: string, minLength: 2}
+    rating:          {type: string, enum: [AAA, AA, A, BBB, BB, B, CCC, D]}
+    status:          {type: string}
+  additionalProperties: true
+dq_checks:
+  - {name: rating_present, field: rating, required: true, severity: error}

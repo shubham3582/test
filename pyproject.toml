@@ -63,6 +63,7 @@ addopts = "-q"
 markers = [
     "chaos: deterministic fault-injection / crash-consistency tests (Stage-1 guarantees)",
     "governance: control-plane governance tests (Stage-2 guarantees)",
+    "ccr: production-depth CCR domain proofs (Stage-3)",
 ]
 
 [tool.ruff]

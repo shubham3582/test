@@ -32,6 +32,14 @@ transitions:
     emit:
       - {topic: "kafka://ccr.display", type: DisplayUpdate}
 
+  # Intraday recalculation: a scheduled (or ad-hoc) trigger re-requests the cube,
+  # driving a fresh calc and a new exposure version at the SAME COB, later tx-time.
+  - event: RecalcRequested
+    from: "*"
+    to: cube_requested
+    emit:
+      - {topic: "kafka://mfl.cube.requests", type: RequestValueCube}
+
   # A cancellation from any state notifies display and stops the saga.
   - event: TradeCancelled
     from: "*"
