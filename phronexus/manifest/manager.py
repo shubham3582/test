@@ -49,7 +49,8 @@ _MISSING = object()
 # Manifest bins
 M_STATUS = "status"
 M_TXN = "txn"
-M_CVER = "cver"
+M_CVER = "cver"          # storage-contract version that produced the document
+M_VVER = "vver"          # validation-contract (JSON Schema) version it satisfied
 M_DOC_ID = "doc_id"
 M_CANONICAL = "canonical"  # {"set":..., "key":...}
 M_PROJECTIONS = "projections"  # [{"set":..., "key":...}, ...]
@@ -198,6 +199,7 @@ class ManifestManager:
             M_STATUS: STATUS_COMMITTED,
             M_TXN: txn_id,
             M_CVER: sc.version,
+            M_VVER: self._active_vver(entity),
             M_DOC_ID: doc_id,
             M_CANONICAL: {"set": canonical.projection.set, "key": canonical.key},
             M_PROJECTIONS: [{"set": r.projection.set, "key": r.key} for r in records],
@@ -301,12 +303,25 @@ class ManifestManager:
 
     # --- read -----------------------------------------------------------
 
+    def _active_vver(self, entity: str) -> Optional[int]:
+        """Version of the active validation (JSON Schema) contract, if any. Pinned
+        into each document's manifest so a read can later re-validate/parse the
+        payload against the *exact* schema it was written under — not whatever is
+        active now."""
+        try:
+            return self._registry.active_validation(entity).version
+        except ContractNotFound:
+            return None
+
     def read(self, entity: str, doc_id: str, *, as_of: Optional[int] = None,
-             tx_as_of: Optional[float] = None) -> Optional[dict[str, Any]]:
+             tx_as_of: Optional[float] = None, validate: bool = False) -> Optional[dict[str, Any]]:
         with self._tel.span("manifest.read", entity=entity):
             sc = self._registry.active_storage(entity)
             if sc.temporal == "bitemporal":
-                return self._read_bitemporal(sc, doc_id, as_of, tx_as_of)
+                doc, vver = self._read_bitemporal(sc, doc_id, as_of, tx_as_of)
+                if validate and doc is not None:
+                    self._validate_on_read(entity, doc_id, doc, vver=vver)
+                return doc
             manifest = self._store.get(sc.manifest_set, doc_id)
             if manifest is None or manifest.bins.get(M_STATUS) != STATUS_COMMITTED:
                 return None
@@ -321,7 +336,28 @@ class ManifestManager:
                 log.warning("manifest.txn_mismatch", entity=entity, doc_id=doc_id)
                 return None
             self._tel.incr("phronexus.reads", entity=entity)
-            return decode_record(sc.canonical_projection, rec.bins)
+            doc = decode_record(sc.canonical_projection, rec.bins)
+            if validate:
+                self._validate_on_read(entity, doc_id, doc, vver=manifest.bins.get(M_VVER))
+            return doc
+
+    def _validate_on_read(self, entity: str, doc_id: str, doc: dict[str, Any],
+                          vver: Optional[int]) -> None:
+        """Re-validate a reconstructed payload against the pinned schema version.
+
+        Opt-in (``read(..., validate=True)``); off the default hot path. Resolves
+        the JSON Schema version the document was written under (``vver``, falling
+        back to the active one) so evolution can't retroactively fail an old read.
+        A violation raises ``ValidationError`` — the caller chose to enforce.
+        """
+        if self._validator is None:
+            return
+        report = self._validator.validate_as_of(entity, doc, vver)
+        if not report.ok:
+            self._tel.incr("phronexus.read.validation_failures", entity=entity)
+            log.warning("manifest.read_validation_failed", entity=entity,
+                        doc_id=doc_id, vver=vver, errors=report.errors)
+            report.raise_if_failed()
 
     def exists(self, entity: str, doc_id: str) -> bool:
         return self.read(entity, doc_id) is not None
@@ -524,7 +560,8 @@ class ManifestManager:
             idx = self._store.get(sc.manifest_set, doc_id)
             versions = list(idx.bins.get("versions", [])) if idx else []
             gen = idx.generation if idx else 0
-            versions.append({"tx": tx_from, "vf": vf, "key": vkey, "txn": txn_id})
+            versions.append({"tx": tx_from, "vf": vf, "key": vkey, "txn": txn_id,
+                             "vv": self._active_vver(entity)})
             try:
                 self._store.put(sc.manifest_set, doc_id, {
                     "_bt": True, M_STATUS: STATUS_COMMITTED, M_DOC_ID: doc_id,
@@ -546,12 +583,17 @@ class ManifestManager:
                  valid_from=vf, temporal="bitemporal")
         return doc_id
 
-    def _read_bitemporal(self, sc, doc_id, as_of, tx_as_of) -> Optional[dict[str, Any]]:
+    def _read_bitemporal(
+        self, sc, doc_id, as_of, tx_as_of
+    ) -> tuple[Optional[dict[str, Any]], Optional[int]]:
+        """Return the as-of view and the JSON Schema version that version was
+        written under (for validated reads); ``(None, None)`` if nothing is
+        visible."""
         import datetime as _dt
 
         idx = self._store.get(sc.manifest_set, doc_id)
         if idx is None or not idx.bins.get("_bt"):
-            return None
+            return (None, None)
         tt = time.time() if tx_as_of is None else float(tx_as_of)
         vt = int(as_of) if as_of is not None else int(_dt.date.today().strftime("%Y%m%d"))
         # Only what was known by tx-time tt and effective by valid-time vt; the
@@ -559,10 +601,12 @@ class ManifestManager:
         candidates = [v for v in idx.bins.get("versions", [])
                       if v["tx"] <= tt and v["vf"] <= vt]
         if not candidates:
-            return None
+            return (None, None)
         best = max(candidates, key=lambda v: (v["tx"], v["vf"]))
         rec = self._store.get(sc.canonical_projection.set, best["key"])
-        return dict(codec.unpack(rec.bins[DOC_BIN])) if rec else None
+        if rec is None:
+            return (None, None)
+        return (dict(codec.unpack(rec.bins[DOC_BIN])), best.get("vv"))
 
     def _reap_superseded(self, existing, records, sc: StorageContract) -> None:
         """Remove projection records no longer referenced after an update."""

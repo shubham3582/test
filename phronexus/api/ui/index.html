@@ -156,7 +156,7 @@
 </div>
 
 <script>
-const S = { token:null, user:null, roles:[], permissions:[], view:'contracts', contracts:{contracts:[],active:{}}, current:null, saveOk:false };
+const S = { token:null, user:null, roles:[], permissions:[], view:'contracts', contracts:{contracts:[],active:{}}, current:null, pendingDraft:null };
 function hasPermission(p){ const P=S.permissions||[];
   return P.includes('*') || P.includes(p) || P.includes(p.split(':')[0]+':*'); }
 
@@ -231,15 +231,28 @@ async function showApp() {
     promotion:renderPromotion, evidence:renderEvidence, lineage:renderLineage}[S.view])();
 }
 
-// ---- Contracts ----
+// ---- Contracts (read-only viewer) ----
+// Authoring is single-path: every contract and JSON Schema is created/changed
+// through the governed Change Requests flow (draft → submit → approve → publish).
+// This screen only *views* published versions and governs the active pointer
+// (activate / rollback). It never writes contract bodies.
 async function renderContracts() {
   const m = document.getElementById('main');
-  m.innerHTML = `<h2>Contracts</h2><div class="sub">Aerospike is the source of truth. ● marks the active version — the one new writes use; older versions stay readable for documents written under them.</div>
+  const canDraft = hasPermission('contract:draft');
+  const draftBtn = canDraft
+    ? '<button class="primary" onclick="proposeChange(null)">Propose change (new draft)</button>'
+    : '';
+  m.innerHTML = `<h2>Contracts</h2><div class="sub">Read-only. Aerospike is the source of truth; ● marks the active version. Contracts and JSON Schemas are authored in one place — <a href="#" onclick="return goView('changes')">Change Requests</a> (draft → approve → publish).</div>
+    <div class="toolbar" style="margin-bottom:12px">${draftBtn}</div>
     <div class="cols"><div id="clist"></div><div id="ceditor"></div></div>`;
   try { S.contracts = await api('/contracts'); } catch(e){ S.contracts={contracts:[],active:{}}; }
   document.getElementById('clist').innerHTML = contractListHtml();
-  editorPanel(null);
+  viewerPanel(null);
 }
+function goView(id){ S.view=id; showApp(); return false; }
+// Jump to Change Requests and open a draft, optionally pre-filled from an
+// existing contract version ("edit as a new draft").
+function proposeChange(doc){ S.pendingDraft = {doc: doc||null}; S.view='changes'; showApp(); }
 
 // "storage:trade:v3" -> {kind, subject:"trade", version:3, group:"storage:trade"}
 // "view:trade:default:v1" -> {kind:"view", subject:"trade:default", version:1, ...}
@@ -308,49 +321,24 @@ async function activateContract(id){
   catch(e){ alert('Activate failed: '+(e.body?.detail||e.message)); }
 }
 
-function editorPanel(doc) {
-  S.saveOk=false;
-  const kindSel = KINDS.map(k=>'<option value="'+k+'">'+k+'</option>').join('');
-  document.getElementById('ceditor').innerHTML = `<div class="card">
-    <div class="row"><div><label>New from template</label>
-      <select id="tmpl"><option value="">— pick a kind —</option>${kindSel}</select></div>
-      <div style="max-width:120px; align-self:end"><button onclick="loadTemplate()">Load</button></div></div>
-    <label>Contract (JSON)</label>
-    <textarea id="cjson" oninput="S.saveOk=false; syncSave()">${doc?escapeHtml(JSON.stringify(doc,null,2)):''}</textarea>
-    <div class="toolbar">
-      <button onclick="validateContract()">Validate</button>
-      <button id="saveBtn" class="primary" disabled onclick="saveContract()">Save</button>
-      <div class="spacer"></div>
-      <label style="margin:0"><input type="checkbox" id="force" style="width:auto"> force (override compat)</label>
-    </div>
-    <div id="cresult"></div></div>`;
-  syncSave();
+// Read-only viewer. No inline editing/publishing — the only way to change a
+// contract is to propose a governed draft (which opens the Change Requests flow
+// pre-filled from this version).
+function viewerPanel(doc, id) {
+  S.viewing = doc || null;   // read back by proposeChange (avoids inlining JSON in attributes)
+  const canDraft = hasPermission('contract:draft');
+  const propose = (doc && canDraft)
+    ? `<button class="primary" onclick="proposeChange(S.viewing)">Propose change from this version</button>`
+    : '';
+  const bodyHtml = doc
+    ? `<div class="smhead"><b>${escapeHtml(id||'')}</b></div>
+       <label>Contract (read-only)</label>
+       <div class="result">${escapeHtml(JSON.stringify(doc,null,2))}</div>
+       <div class="toolbar">${propose || '<span class="muted">viewing only</span>'}</div>`
+    : `<div class="muted">Select a version to view it. To create or change a contract or JSON Schema, use ${canDraft?'“Propose change”':'the Change Requests flow'} — every change is drafted, approved, and published through one governed path.</div>`;
+  document.getElementById('ceditor').innerHTML = `<div class="card">${bodyHtml}</div>`;
 }
-function loadTemplate(){ const k=document.getElementById('tmpl').value; if(!k) return;
-  document.getElementById('cjson').value = JSON.stringify(TEMPLATES[k],null,2); S.saveOk=false; syncSave();
-  document.getElementById('cresult').innerHTML=''; }
-async function loadContract(id){ try{ const doc=await api('/contracts/'+encodeURIComponent(id)); editorPanel(doc);}catch(e){} }
-function syncSave(){ const b=document.getElementById('saveBtn'); if(b) b.disabled=!S.saveOk; }
-
-function parseEditor(){ return JSON.parse(document.getElementById('cjson').value); }
-async function validateContract(){
-  const out=document.getElementById('cresult');
-  let doc; try{ doc=parseEditor(); }catch(e){ out.innerHTML=res(false,['Invalid JSON: '+e.message]); return; }
-  try {
-    const r = await api('/contracts/validate', {method:'POST', body:JSON.stringify(doc)});
-    S.saveOk = !!r.ok; syncSave();
-    out.innerHTML = r.ok ? res(true, ['Valid — '+r.identity]) : res(false, r.errors||['invalid']);
-  } catch(e){ S.saveOk=false; syncSave(); out.innerHTML=res(false,[e.body?.detail||e.message]); }
-}
-async function saveContract(){
-  const out=document.getElementById('cresult'); let doc; try{ doc=parseEditor(); }catch(e){ return; }
-  const force = document.getElementById('force').checked;
-  try {
-    const r = await api('/contracts?force='+force, {method:'POST', body:JSON.stringify(doc)});
-    out.innerHTML = res(true, ['Saved & activated — '+r.published]);
-    renderContracts();
-  } catch(e){ out.innerHTML = res(false, e.body?.errors || [e.body?.detail||e.message]); }
-}
+async function loadContract(id){ try{ const doc=await api('/contracts/'+encodeURIComponent(id)); viewerPanel(doc, id);}catch(e){} }
 
 // ---- Document validator ----
 function renderValidate(){
@@ -562,10 +550,13 @@ async function loadTrace(){
 const CH_BADGE = {draft:'pill', submitted:'badge warn', approved:'badge ok', published:'badge ok', rejected:'badge err', withdrawn:'pill'};
 async function renderChanges(){
   document.getElementById('main').innerHTML = `<h2>Change Requests</h2>
-    <div class="sub">Draft → submit → approve (N-of-M) → publish. Every action is recorded in the tamper-evident history.</div>
+    <div class="sub">The one place contracts &amp; JSON Schemas are authored. Draft → submit → approve (N-of-M) → publish. Every action is recorded in the tamper-evident history.</div>
     <div class="cols"><div id="chlist"></div><div id="chdetail"></div></div>`;
   await loadChanges();
-  document.getElementById('chdetail').innerHTML = '<div class="muted">Select a change, or create a draft.</div>';
+  // Arriving via "Propose change" from the read-only Contracts screen opens a
+  // draft immediately, optionally pre-filled from the selected version.
+  if(S.pendingDraft){ const p=S.pendingDraft; S.pendingDraft=null; newChange(p.doc); }
+  else document.getElementById('chdetail').innerHTML = '<div class="muted">Select a change, or create a draft.</div>';
 }
 async function loadChanges(){
   let d; try{ d = await api('/governance/changes'); }catch(e){ d = {changes:[]}; }
@@ -578,12 +569,19 @@ async function loadChanges(){
   h += '</div>';
   document.getElementById('chlist').innerHTML = h;
 }
-function newChange(){
+// prefill: an existing contract doc when editing a version as a new draft; else
+// start blank and offer a per-kind template (storage/validation/stream/…).
+function newChange(prefill){
   const kindSel = KINDS.map(k=>`<option>${k}</option>`).join('');
+  const initial = prefill ? escapeHtml(JSON.stringify(prefill,null,2)) : '';
+  const hint = prefill
+    ? '<div class="sub" style="margin-top:0">Pre-filled from an existing version. Bump <code>version</code> for a new revision before creating the draft.</div>'
+    : '';
   document.getElementById('chdetail').innerHTML = `<div class="card">
+    ${hint}
     <div class="row"><div><label>New from template</label><select id="chtmpl"><option value="">— kind —</option>${kindSel}</select></div>
       <div style="max-width:100px;align-self:end"><button onclick="chLoadTmpl()">Load</button></div></div>
-    <label>Contract (JSON)</label><textarea id="chjson"></textarea>
+    <label>Contract (JSON)</label><textarea id="chjson">${initial}</textarea>
     <div class="toolbar"><button class="primary" onclick="submitDraft()">Create draft</button></div>
     <div id="chresult"></div></div>`;
 }

@@ -1,0 +1,26 @@
+# Lean, self-contained CCR demo image — in-memory backend, no external services.
+# Serves the REST API + management UI pre-loaded with CCR data (see deploy/ccr_demo.py).
+#   docker build -f deploy/Dockerfile.demo -t phronexus-ccr-demo .
+#   docker run --rm -p 8080:8080 phronexus-ccr-demo   # UI at http://localhost:8080/ui
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# Deps first for layer caching — only the API extra (memory backend needs no
+# aerospike/kafka/iceberg clients).
+COPY pyproject.toml README.md ./
+COPY phronexus ./phronexus
+RUN pip install --upgrade pip && pip install '.[api]'
+
+# Contracts, the CCR example, and the demo entrypoint.
+COPY examples ./examples
+COPY deploy ./deploy
+COPY contracts_examples ./contracts_examples
+COPY config ./config
+
+EXPOSE 8080
+CMD ["python", "-m", "deploy.ccr_demo"]

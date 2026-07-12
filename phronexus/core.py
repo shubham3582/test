@@ -212,11 +212,28 @@ class Phronexus:
         return self.manifest.write_many(entity, documents)
 
     def get(self, entity: str, doc_id: str, *, as_of: Optional[int] = None,
-            tx_as_of: Optional[float] = None) -> Optional[dict[str, Any]]:
+            tx_as_of: Optional[float] = None, validate: bool = False) -> Optional[dict[str, Any]]:
         # Bitemporal reads default the valid-time (as_of) to the environment COB.
         if as_of is None and self._is_bitemporal(entity):
             as_of = self.governance.get_cob()
-        return self.manifest.read(entity, doc_id, as_of=as_of, tx_as_of=tx_as_of)
+        # validate=True re-checks the payload against the JSON Schema version it was
+        # written under (opt-in; off the default hot path). Use at trust boundaries.
+        return self.manifest.read(entity, doc_id, as_of=as_of, tx_as_of=tx_as_of,
+                                  validate=validate)
+
+    def schema(self, entity: str, *, version: Optional[int] = None) -> dict[str, Any]:
+        """Fetch the versioned JSON Schema + DQ checks for an entity — the active
+        version, or a specific one. A read-only schema-registry surface consumers
+        can resolve a payload's shape against. Raises ``ContractNotFound`` if none."""
+        vc = (self.registry.get_version(f"validation:{entity}:v{version}")
+              if version is not None else self.registry.active_validation(entity))
+        return {
+            "entity": entity,
+            "version": vc.version,
+            "mode": vc.mode.value,
+            "json_schema": vc.json_schema,
+            "dq_checks": [c.model_dump(mode="json", by_alias=True) for c in vc.dq_checks],
+        }
 
     def get_many(self, entity: str, doc_ids) -> dict[str, dict[str, Any]]:
         """Batch-read documents by id — one batched round-trip per set instead of

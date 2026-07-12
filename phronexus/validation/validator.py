@@ -70,6 +70,29 @@ class Validator:
             vc = self._registry.active_validation(entity)
         except ContractNotFound:
             return ValidationReport(ok=True)  # no contract -> nothing to validate
+        return self._run(vc, entity, document)
+
+    def validate_as_of(
+        self, entity: str, document: dict[str, Any], vver: Optional[int]
+    ) -> ValidationReport:
+        """Validate against a *specific* validation-contract version (the one a
+        document was written under), falling back to the active version when the
+        pin is absent or that version is no longer stored. Used by validated reads
+        so schema evolution can't retroactively fail an already-committed payload."""
+        vc = None
+        if vver is not None:
+            try:
+                vc = self._registry.get_version(f"validation:{entity}:v{vver}")
+            except ContractNotFound:
+                vc = None  # pinned version aged out -> fall back to active
+        if vc is None:
+            try:
+                vc = self._registry.active_validation(entity)
+            except ContractNotFound:
+                return ValidationReport(ok=True)
+        return self._run(vc, entity, document)
+
+    def _run(self, vc, entity: str, document: dict[str, Any]) -> ValidationReport:
         if vc.mode == ValidationMode.off:
             return ValidationReport(ok=True)
 

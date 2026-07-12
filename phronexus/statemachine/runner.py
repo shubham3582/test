@@ -32,20 +32,24 @@ def run(px: Phronexus, source, machine: StateMachine, *, batch_size: int = 100,
     batches = 0
     while max_batches is None or batches < max_batches:
         events = source.poll(batch_size)
-        if not events:
-            break
         for ev in events:
             result = machine.process(ev)
             tally[result.status] = tally.get(result.status, 0) + 1
             if result.status == "rejected" and machine.dead_letter(ev, result):
                 tally["dead_lettered"] += 1
-        machine.drain_outbox()  # sweep any outbox rows left by failed publishes
+        if events:
+            machine.drain_outbox()  # sweep any outbox rows left by failed publishes
         # Commit offsets only after the batch is processed + relayed (manual
         # commit closes the loss window; replay is safe because the path is
         # idempotent). Sources without a commit() (in-memory) are a no-op.
+        # Also commit when the poll consumed messages that all filtered out as
+        # poison (no events, but the offset advanced), so a poison-only batch
+        # can't redeliver forever across a restart/rebalance.
         commit = getattr(source, "commit", None)
-        if commit is not None:
+        if commit is not None and (events or getattr(source, "uncommitted", False)):
             commit()
+        if not events:
+            break
         batches += 1
     return tally
 
@@ -73,6 +77,32 @@ def serve(px, source, machine, stop, *, initial_backoff: float = 1.0,
             backoff = min(backoff * 2, max_backoff)
 
 
+def _make_poison_handler(px, settings):  # pragma: no cover - needs a broker
+    """Route structurally-undecodable inbound messages aside so a poison message
+    never wedges a partition. Produces the RAW bytes to the DLQ topic (with the
+    decode error and broker coordinates as headers) and counts them; if no DLQ
+    topic is configured, falls back to log-and-drop."""
+    dlq = settings.statemachine.dlq_topic
+    if not dlq:
+        return None  # KafkaInputSource uses its log-and-drop default
+    from phronexus.kafka_client import make_producer
+
+    producer = make_producer(settings.kafka)
+    topic = dlq.split("://", 1)[-1]
+
+    def handle(raw: bytes, meta: dict, exc: Exception) -> None:
+        px.telemetry.incr("phronexus.sm.poison")
+        headers = [("error", str(exc).encode()),
+                   ("source_topic", str(meta.get("topic", "")).encode()),
+                   ("source_partition", str(meta.get("partition", "")).encode()),
+                   ("source_offset", str(meta.get("offset", "")).encode())]
+        producer.produce(topic, value=raw, headers=headers)
+        producer.poll(0)
+        log.error("statemachine.poison_message", error=str(exc), dlq=topic, **meta)
+
+    return handle
+
+
 def main() -> None:  # pragma: no cover - process entrypoint
     settings = Settings()
     px = Phronexus(settings)
@@ -80,7 +110,7 @@ def main() -> None:  # pragma: no cover - process entrypoint
     msg_journal = (px.message_journal()
                    if settings.journal.enabled and settings.journal.journal_messages else None)
     source = KafkaInputSource(settings.kafka, sm_cfg.input_topics, sm_cfg.consumer_group,
-                              journal=msg_journal)
+                              journal=msg_journal, on_poison=_make_poison_handler(px, settings))
     machine = px.state_machine(output=KafkaOutputPublisher(settings.kafka))
 
     stop = threading.Event()

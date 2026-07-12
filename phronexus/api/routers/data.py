@@ -44,11 +44,21 @@ def validate(entity: str, body: WriteRequest, px: Phronexus = Depends(get_px)) -
 
 
 @router.get("/entities/{entity}/documents/{doc_id}")
-def read(entity: str, doc_id: str, px: Phronexus = Depends(get_px)) -> dict:
-    doc = px.get(entity, doc_id)
+def read(entity: str, doc_id: str, validate: bool = False,
+         px: Phronexus = Depends(get_px)) -> dict:
+    """Read a document. ``?validate=true`` re-checks the payload against the JSON
+    Schema version it was written under before returning (422 on violation)."""
+    doc = px.get(entity, doc_id, validate=validate)
     if doc is None:
         raise DocumentNotFound(f"{entity}/{doc_id} not found")
     return doc
+
+
+@router.get("/entities/{entity}/schema")
+def schema(entity: str, version: int | None = None, px: Phronexus = Depends(get_px)) -> dict:
+    """The versioned JSON Schema + DQ checks for an entity (active, or ``?version=``).
+    A read-only schema-registry surface for consumers deserializing payloads."""
+    return px.schema(entity, version=version)
 
 
 @router.delete("/entities/{entity}/documents/{doc_id}")

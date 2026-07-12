@@ -9,11 +9,19 @@ from __future__ import annotations
 
 import abc
 import json
-from typing import Optional
+from typing import Callable, Optional
+
+import structlog
 
 from phronexus.config import KafkaSettings
 from phronexus.errors import ConfigError
 from phronexus.statemachine.models import InputEvent, OutputEvent
+
+log = structlog.get_logger("phronexus.statemachine")
+
+# A poison handler receives the raw undecodable message, its broker coordinates
+# (topic/partition/offset), and the decode error. See KafkaInputSource.poll.
+PoisonHandler = Callable[[bytes, dict, Exception], None]
 
 
 # --- input ---------------------------------------------------------------
@@ -39,8 +47,17 @@ class MemoryInputSource(InputSource):
         return out
 
 
+def _log_poison(raw: bytes, meta: dict, exc: Exception) -> None:
+    """Default poison handler: log and drop. A structurally-broken message can't
+    be reprocessed into a valid document, so dropping it (offset advances) is
+    strictly better than wedging the partition on endless redelivery."""
+    log.error("statemachine.poison_message", error=str(exc),
+              bytes=len(raw), **meta)
+
+
 class KafkaInputSource(InputSource):  # pragma: no cover - needs a broker
-    def __init__(self, cfg: KafkaSettings, topics: list[str], group_id: str, journal=None):
+    def __init__(self, cfg: KafkaSettings, topics: list[str], group_id: str, journal=None,
+                 on_poison: Optional[PoisonHandler] = None):
         from phronexus.kafka_client import make_consumer
 
         # Manual offset commit: we commit only AFTER a batch is processed +
@@ -53,6 +70,12 @@ class KafkaInputSource(InputSource):  # pragma: no cover - needs a broker
         })
         self._c.subscribe(topics)
         self._journal = journal  # optional MessageJournal — records the raw envelope
+        # Where structurally-undecodable messages go. See poll().
+        self._on_poison = on_poison or _log_poison
+        # True once poll() has consumed messages the group hasn't committed yet.
+        # Lets the runner commit even a batch that decoded to *no* events (every
+        # message was poison), so a poison-only batch can't redeliver forever.
+        self.uncommitted = False
 
     def poll(self, max_events: int) -> list[InputEvent]:
         out: list[InputEvent] = []
@@ -62,23 +85,36 @@ class KafkaInputSource(InputSource):  # pragma: no cover - needs a broker
                 break
             if msg.error():
                 continue
-            d = json.loads(msg.value())
+            self.uncommitted = True  # a real message was consumed (good or poison)
+            raw = msg.value()
+            meta = {"topic": msg.topic(), "partition": msg.partition(), "offset": msg.offset()}
+            try:
+                d = json.loads(raw)
+                event = InputEvent(
+                    entity=d["entity"], event_type=d["event_type"], key=d["key"],
+                    payload=d.get("payload", {}), event_id=d["event_id"], ts=d.get("ts", 0.0),
+                )
+            except (ValueError, KeyError, TypeError) as exc:
+                # Undecodable envelope (bad JSON / missing required field). It can't
+                # become an InputEvent, so the semantic DLQ (which keys on
+                # entity/event_id) can't take it. Route the RAW bytes to the poison
+                # handler and skip, so the offset advances — one bad message must
+                # not wedge the whole partition on endless redelivery.
+                self._on_poison(raw, meta, exc)
+                continue
             if self._journal is not None:
                 # Persist the full inbound message as msgpack before processing.
                 self._journal.record(
-                    f"{msg.topic()}:{msg.partition()}:{msg.offset()}", d,
-                    topic=msg.topic(), partition=msg.partition(), offset=msg.offset(),
-                    ts=(msg.timestamp() or (0, 0.0))[1] / 1000.0,
+                    f"{meta['topic']}:{meta['partition']}:{meta['offset']}", d,
+                    ts=(msg.timestamp() or (0, 0.0))[1] / 1000.0, **meta,
                 )
-            out.append(InputEvent(
-                entity=d["entity"], event_type=d["event_type"], key=d["key"],
-                payload=d.get("payload", {}), event_id=d["event_id"], ts=d.get("ts", 0.0),
-            ))
+            out.append(event)
         return out
 
     def commit(self) -> None:
         """Commit consumed offsets — call only after the batch is durably handled."""
         self._c.commit(asynchronous=False)
+        self.uncommitted = False
 
     def close(self) -> None:
         self._c.close()

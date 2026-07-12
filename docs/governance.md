@@ -97,6 +97,25 @@ px.governance.publish("bob", cr["id"])                # only when approved
 **REST** — `POST /governance/changes`, then `/{id}/{submit|approve|reject|withdraw|publish}`,
 `GET /governance/changes[/{id}]`.
 
+### One authoring path — the UI is read-only
+
+Every contract kind — including a `validation` contract's **JSON Schema** and a `stream`
+contract's per-event schema — is created and changed in exactly **one place**: the
+governed change-request flow above (draft → submit → approve → publish). There is no second
+way to define or edit a schema interactively.
+
+In the console this is enforced by making the **Contracts** screen read-only: it lists
+published versions and governs the active pointer (activate / rollback), but has no inline
+editor or "Save". To change anything you click **Propose change** (needs `contract:draft`),
+which opens the **Change Requests** screen pre-filled from that version — bump `version`,
+create the draft, and take it through approval. This guarantees no contract or schema reaches
+the store without the compatibility gate, the N-of-M approval, and the hash-chained history
+entry.
+
+> The registry's low-level `publish`/`activate` primitives (and `POST /contracts`) remain for
+> **bootstrap and automation** — loading a contract directory at startup, promotion import,
+> CI seeding — not interactive authoring. Human, ad-hoc changes go through the governed path.
+
 ---
 
 ## 3. Compatibility explanations + diff
