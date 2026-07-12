@@ -20,7 +20,9 @@ TTL, and Iceberg retention.
 | `primary_key` | `[string]` | fields forming the document id |
 | `manifest_set` | string | Aerospike set holding the manifest (commit point) |
 | `update_policy` | `upsert` \| `insert_only` | `insert_only` rejects overwrites |
-| `delete_policy` | `soft` \| `hard` | soft = tombstone manifest; hard = purge |
+| `delete_policy` | `soft` \| `hard` | soft = tombstone manifest; hard = purge (data removed, minimal tombstone kept) |
+| `temporal` | `none` \| `bitemporal` | `bitemporal` makes writes append-only temporal versions (valid-time + tx-time) for as-of reproducibility — see [bitemporal.md](bitemporal.md). Default `none`. |
+| `valid_time_field` | string? | for `bitemporal`: the document field carrying the effective date (int YYYYMMDD); absent → defaults to the environment COB |
 | `projections` | `[Projection]` | one physical record shape per read path |
 | `native_txn` | bool? | per-entity override of the backend's `aerospike.use_native_txn`: `true` = wrap the write in a native Aerospike multi-record txn (8.0+ EE), `false` = ordered puts with the manifest as the commit point (works on CE), omit/`null` = inherit the backend default. The manifest is the visibility commit point either way. |
 | `iceberg` | object | `{enabled, table, partition_by:[…], retention_days}` |

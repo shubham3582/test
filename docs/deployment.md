@@ -140,6 +140,53 @@ password: "${AEROSPIKE_PASSWORD}"
 > high-throughput entity, or require MRT for a critical one) — see
 > [contracts-reference.md](contracts-reference.md#storage).
 
+### Community-Edition mode (no atomic transactions)
+
+Without native transactions the state machine cannot be exactly-once, so by default it
+**refuses to start** (fail-fast). To run on CE, opt into best-effort explicitly:
+
+```yaml
+# config/statemachine.yaml
+require_atomic: false        # allow the saga on a non-atomic store (at-least-once)
+# config/changefeed.yaml
+verify_commit: true          # auto-on when use_native_txn=false: suppress phantom
+                             # change events from a non-transactional crash
+# config/reaper.yaml
+orphan_grace_seconds: 300    # a projection younger than this is never reaped (an
+                             # in-flight CE write is not mistaken for an orphan)
+```
+
+`phronexus doctor` reports the posture: on CE/memory it flags **LOSS POSSIBLE** (non-zero
+exit); on Enterprise + SC + native txn it reports no-loss.
+
+## Governance & RBAC
+
+The control plane ([governance.md](governance.md)) is config-driven. Map roles to
+permissions and set the approval policy:
+
+```yaml
+# config/api.yaml — auth.roles (role -> permission strings; "*" = all)
+auth:
+  schemes: ["jwt"]           # or "oidc" — role-bearing schemes gate governance
+  roles:
+    admin:    ["*"]
+    author:   ["governance:read", "contract:draft", "contract:submit"]
+    approver: ["governance:read", "contract:approve", "contract:publish", "evidence:export"]
+    operator: ["governance:read", "backfill:control", "cob:set", "contract:promote"]
+  users:                     # map local users (or OIDC groups) to roles
+    alice: {password_sha256: "…", roles: ["author"]}
+
+# config/governance.yaml
+environment: prod
+is_production: true
+approval_policy: { prod: { storage: 2, "*": 1 }, "*": { "*": 1 } }   # N-of-M per env×kind
+allow_self_approve: false    # separation of duties
+bundle_secret: "${GOV_BUNDLE_SECRET}"   # promotion/evidence signing (else jwt_secret)
+```
+
+> `api_key` / `bearer` / `mtls` principals carry no roles and (unless `admin_principals`
+> is set) are treated as admin — use `jwt`/`oidc` for a governed deployment.
+
 ### Native client options (passthrough)
 
 Any native client policy Phronexus doesn't surface as a named field can be set

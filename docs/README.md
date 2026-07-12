@@ -5,7 +5,9 @@
 | [architecture.md](architecture.md) | The mental model, components, the manifest write path, and the state machine — with diagrams. Start here. |
 | [building-on-phronexus.md](building-on-phronexus.md) | Developer guide: onboard a new entity by config end-to-end, extend with hooks, use the REST API/SDK, evolve contracts, test. |
 | [api-reference.md](api-reference.md) | The verbs at a glance: Python (`Phronexus`), REST endpoints, and the remote SDK. |
-| [contracts-reference.md](contracts-reference.md) | Field-by-field reference for all six contract kinds (storage, query, view, validation, transition, stream). |
+| [contracts-reference.md](contracts-reference.md) | Field-by-field reference for all six contract kinds (storage, query, view, validation, transition, stream), incl. `temporal`/`valid_time_field`. |
+| [governance.md](governance.md) | **Control plane**: config-driven RBAC, the change→approve→publish workflow (N-of-M + separation of duties), hash-chained history, rollback, environment promotion, COB, backfill control, and evidence export. |
+| [bitemporal.md](bitemporal.md) | Bitemporal storage: `temporal: bitemporal`, valid-time + transaction-time, as-of reads, COB defaulting, and late/corrected events. |
 | [storage-layouts.md](storage-layouts.md) | Physical storage options: `map`/`msgpack`/`bins` encoding, `bin_map`, `spread`, `native_txn`, and batch reads — with worked layouts. |
 | [state-machine.md](state-machine.md) | The transactional state machine in depth: atomicity model, hooks, output routing, the three faces. |
 | [ccr-reference.md](ccr-reference.md) | End-to-end reference: Counterparty-Credit-Risk saga, the hot value cube, and the exactly-once scheduler — all as config. |
