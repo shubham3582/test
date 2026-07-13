@@ -68,7 +68,7 @@ key; the manifest generation-CAS is the backstop. Scale horizontally by partitio
 
 ## The transition contract (metadata, not code)
 
-One of the six contract kinds. Onboarding a new lifecycle is a config file, like every
+One of the seven contract kinds. Onboarding a new lifecycle is a config file, like every
 other entity concern.
 
 ```yaml

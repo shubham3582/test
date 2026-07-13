@@ -11,6 +11,7 @@
 | [bitemporal.md](bitemporal.md) | Bitemporal storage: `temporal: bitemporal`, valid-time + transaction-time, as-of reads, COB defaulting, and late/corrected events. |
 | [storage-layouts.md](storage-layouts.md) | Physical storage options: `map`/`msgpack`/`bins` encoding, `bin_map`, `spread`, `native_txn`, and batch reads — with worked layouts. |
 | [state-machine.md](state-machine.md) | The transactional state machine in depth: atomicity model, hooks, output routing, the three faces. |
+| [scaling.md](scaling.md) | Scaling the stateless runner to 500K TPS+: partitions × replicas, Aerospike sizing, getting the produce path off the consume loop, key-skew hot partitions, and the config knobs. |
 | [ccr-reference.md](ccr-reference.md) | End-to-end reference: Counterparty-Credit-Risk saga, the hot value cube, and the exactly-once scheduler — all as config. |
 | [ccr-architecture.md](ccr-architecture.md) | Reference architecture: Phronexus as the hot-tier data plane for a fleet of CCR compute services — boundaries, who-owns-what, and the five disciplines. |
 | [retention-and-journals.md](retention-and-journals.md) | Insert-only, idempotent retention log (self-reconciling on replay) and the binary msgpack journals for messages and request/response pairs. |

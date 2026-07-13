@@ -23,7 +23,7 @@ ready ([deployment.md](deployment.md)).
 
 ## The mental model
 
-You describe an entity with up to **six contracts**; Phronexus does the rest.
+You describe an entity with up to **seven contracts**; Phronexus does the rest.
 
 ```mermaid
 flowchart LR

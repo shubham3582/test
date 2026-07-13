@@ -38,9 +38,11 @@ Full docs are in [`docs/`](docs/):
 - **[governance.md](docs/governance.md)** — the control plane: RBAC, change→approve→publish, hash-chained history, rollback, promotion, COB, backfill control, evidence export.
 - **[bitemporal.md](docs/bitemporal.md)** — bitemporal storage: valid-time + transaction-time, as-of reads, COB defaulting, late/corrected events.
 - **[api-reference.md](docs/api-reference.md)** — the verbs at a glance: Python, REST (incl. governance + lineage), and the remote SDK.
-- **[contracts-reference.md](docs/contracts-reference.md)** — every field of the six contract kinds (incl. `temporal`/`valid_time_field`).
+- **[contracts-reference.md](docs/contracts-reference.md)** — every field of the seven contract kinds (incl. `temporal`/`valid_time_field`).
+- **[messaging.md](docs/messaging.md)** — creating & validating messages with JSON Schema: outbound `stream` (shaped emit), inbound `ingress`, what `validate` does (modes + outcomes), and fetching schemas.
 - **[storage-layouts.md](docs/storage-layouts.md)** — physical storage options: `msgpack`/`bins`/`spread` encodings, `bin_map`, `native_txn`, batch reads.
 - **[state-machine.md](docs/state-machine.md)** — the transactional state machine in depth.
+- **[scaling.md](docs/scaling.md)** — scaling the stateless runner to 500K TPS+: partitions × replicas, Aerospike sizing, decoupling the produce path, hot-partition skew, and the config knobs.
 - **[ccr-reference.md](docs/ccr-reference.md)** — production-depth Counterparty-Credit-Risk reference: the ten proofs (onboarding → recovery), all as config.
 - **[retention-and-journals.md](docs/retention-and-journals.md)** — insert-only, self-reconciling retention log and the binary msgpack journals.
 - **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, native-client options, TLS/mTLS, auth, RBAC, observability, ops.
@@ -57,7 +59,7 @@ python examples/bond/run_bond.py        # onboard an entity by config, end to en
 
 | Example | Shows |
 |---|---|
-| [`bond`](examples/bond) | onboard an entity by config (storage/query/view/validation/transition) |
+| [`bond`](examples/bond) | onboard an entity by config (storage/query/view/validation/transition/stream/ingress) — incl. a **shaped** outbound message and **inbound** message validation |
 | [`ccr`](examples/ccr) | **production-depth CCR**: onboarding + reference DQ, netting-set lifecycle + served aggregation, cube projection, intraday recalc, bitemporal COB, hot/cold tiering, lineage, recovery (ten proofs, `pytest -m ccr`) |
 | [`otc_trade`](examples/otc_trade) | validation → ETL → dual-shape storage (`t_doc` msgpack + `t_base` bins), reference-data DQ, named indexes `idx_cp`/`idx_ns`, batch `find` |
 | [`fvcube`](examples/fvcube) | a future-value cube stored **transposed** — each date its own bin (`spread`) |
@@ -94,16 +96,17 @@ last**. The manifest is the single commit point:
   concurrency across competing writers.
 - Crashed writes leave only invisible orphans, swept by the **reaper**.
 
-## The six contract kinds
+## The seven contract kinds
 
 | Contract | Defines | Example file |
 |----------|---------|--------------|
 | **storage** | primary key, projections across sets, update/delete policy, TTL, Iceberg retention | `contracts_examples/trade.storage.yaml` |
 | **query** | searchable fields, index types, named query patterns | `contracts_examples/trade.query.yaml` |
 | **view** | consumer output: field allow-list, masking, transforms | `contracts_examples/trade.view.*.yaml` |
-| **transition** | state-machine lifecycle: states, guards, emitted events | `contracts_examples/trade.transition.yaml` |
-| **validation** | JSON Schema (syntax) + data-quality checks | `contracts_examples/trade.validation.yaml` |
-| **stream** | JSON Schema on published events (no external registry) | `examples/bond/bond.stream.yaml` |
+| **transition** | state-machine lifecycle: states, guards, emitted events (payload **shaped** from specific fields) | `contracts_examples/trade.transition.yaml` |
+| **validation** | JSON Schema (syntax) + data-quality checks on the stored document | `contracts_examples/trade.validation.yaml` |
+| **stream** | JSON Schema on **outbound** messages (validated at produce time; no external registry) | `examples/bond/bond.stream.yaml` |
+| **ingress** | JSON Schema on **inbound** messages (validated before a transition; failures dead-lettered) | `examples/bond/bond.ingress.yaml` |
 
 Contracts are versioned and stored in the `_contracts` set. An in-process cache
 refreshes on a configurable cadence (default **300s**), so publishing a new
@@ -313,6 +316,14 @@ report = px.validate("trade", doc)   # -> ValidationReport(ok, errors, warnings)
 Kafka reject topic or an HTTP webhook (`statemachine.dlq_topic:` `kafka://…` /
 `http://…` / `null://`), or emit a specific message via a reject hook — see
 [`examples/reject_handling/`](examples/reject_handling).
+
+This is document validation at the *write* boundary. Messages on the wire are
+validated separately: an **`ingress`** contract checks each *inbound* message
+before its transition (failures dead-lettered), and a **`stream`** contract checks
+each *outbound* message — created by shaping specific document fields — at produce
+time. Each document read can also be re-checked against the schema version it was
+written under (`px.get(entity, id, validate=True)`). See
+[docs/messaging.md](docs/messaging.md).
 
 ## Transactional state machine (optional face)
 

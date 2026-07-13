@@ -74,7 +74,7 @@ bypasses — the contract registry's `publish`/`activate` primitives. Storage en
 opt into **bitemporal** mode ([bitemporal.md](bitemporal.md)) for as-of-reproducible reads
 against a COB.
 
-The **six contract kinds** drive every layer:
+The **seven contract kinds** drive every layer:
 
 | Contract | Drives | Layer |
 |---|---|---|
@@ -82,8 +82,9 @@ The **six contract kinds** drive every layer:
 | `query` | searchable fields + indexes, named query patterns | Inverted Index + Query Engine |
 | `view` | consumer output: allow-list, masking, transforms | View Engine |
 | `validation` | JSON Schema + data-quality checks | Validator |
-| `transition` | state-machine states, guards, emitted events | State Machine |
-| `stream` | JSON Schema on published events (produce-time validation) | State Machine output |
+| `transition` | state-machine states, guards, emitted events (payload shaped from fields) | State Machine |
+| `stream` | JSON Schema on **outbound** messages (produce-time validation) | State Machine output |
+| `ingress` | JSON Schema on **inbound** messages (validated before a transition) | State Machine input |
 
 ## The write path (manifest pattern)
 
