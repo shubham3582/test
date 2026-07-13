@@ -17,6 +17,7 @@
 | [retention-and-journals.md](retention-and-journals.md) | Insert-only, idempotent retention log (self-reconciling on replay) and the binary msgpack journals for messages and request/response pairs. |
 | [resync.md](resync.md) | Date-scoped store resync: rehydrate the hot store (Aerospike) from the cold tier (Iceberg) and vice versa — silent coords-preserving restore, idempotent, contract-driven format, checkpointed/governed. |
 | [deployment.md](deployment.md) | Production: Aerospike / MSK / S3 Tables, TLS/mTLS, auth, observability, operations, scaling. |
+| [running-on-amazon-linux.md](running-on-amazon-linux.md) | Run the engine on Amazon Linux with **no Docker, air-gapped**, against an existing Aerospike — offline wheelhouse install, headless (no FastAPI) or REST/UI, systemd, config. |
 | [logging.md](logging.md) | The one place to change log format/level/fields for the whole platform (structlog). |
 | [packaging.md](packaging.md) | Build the wheel, consume it as a library (extras matrix), and produce an offline/air-gapped install bundle. |
 | [integration-dishtayantra.md](integration-dishtayantra.md) | Integrating Phronexus into a DishtaYantra DAG as library components. |
