@@ -35,7 +35,7 @@ auth:
   # --- config-driven RBAC: role -> permissions (union across a principal's roles) ---
   # "*" grants everything; "<ns>:*" grants a namespace. Governance permissions:
   #   governance:read  contract:{draft,submit,approve,publish,promote,rollback}
-  #   backfill:{run,control}  cob:set  evidence:export
+  #   backfill:{run,control}  resync:control  cob:set  evidence:export
   # OIDC deployments map IdP groups -> these role names (auth.oidc.role_claim).
   roles:
     admin: ["*"]
@@ -44,7 +44,7 @@ auth:
     approver: ["governance:read", "contract:approve", "contract:publish",
                "contract:rollback", "evidence:export"]
     operator: ["governance:read", "backfill:run", "backfill:control",
-               "cob:set", "contract:promote"]
+               "resync:control", "cob:set", "contract:promote"]
 
   # --- Microsoft Entra / Azure AD (set provider: oidc to enable) ---
   oidc:

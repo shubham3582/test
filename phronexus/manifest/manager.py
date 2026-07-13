@@ -75,6 +75,53 @@ class StagedWrite:
     ts: float
 
 
+@dataclass
+class ResyncUnit:
+    """One committed document version to re-land into the cold tier (hot→cold)."""
+
+    doc_id: str
+    document: dict[str, Any]
+    valid_from: Optional[int]   # business date (bitemporal); None otherwise
+    tx_from: Optional[float]    # original commit wall-clock
+    txn_id: str                 # original write identity (idempotency key downstream)
+    version: int                # monotonic per-doc ordinal (latest-wins order)
+    contract_version: int
+    op: str                     # "upsert" | "delete"
+
+    def key(self) -> str:
+        """Deterministic, stable ordering / checkpoint key for this unit."""
+        return f"{self.doc_id}|{self.txn_id}"
+
+
+def _in_date_window(value: Optional[int], lo: Optional[int], hi: Optional[int]) -> bool:
+    """Inclusive YYYYMMDD window test (open-ended when a bound is ``None``)."""
+    if value is None:
+        return False
+    if lo is not None and value < int(lo):
+        return False
+    if hi is not None and value > int(hi):
+        return False
+    return True
+
+
+def _ts_window(date_from: Optional[int], date_to: Optional[int]) -> tuple[Optional[float], Optional[float]]:
+    """Map a YYYYMMDD date range to a ``[lo, hi)`` epoch-seconds window (UTC days).
+
+    ``date_to`` is inclusive of the whole day, so the upper bound is the start of
+    the following day.
+    """
+    import datetime as _dt
+
+    def _start(d: int) -> float:
+        s = str(int(d))
+        day = _dt.datetime.strptime(s, "%Y%m%d").replace(tzinfo=_dt.timezone.utc)
+        return day.timestamp()
+
+    lo = _start(date_from) if date_from is not None else None
+    hi = (_start(date_to) + 86400.0) if date_to is not None else None
+    return lo, hi
+
+
 class ManifestManager:
     def __init__(
         self,
@@ -157,7 +204,8 @@ class ManifestManager:
         return ids
 
     def stage_write(self, entity: str, document: dict[str, Any], txn,
-                    stage_extra=None) -> "StagedWrite":
+                    stage_extra=None, *, txn_id: Optional[str] = None,
+                    ts: Optional[float] = None, emit_changefeed: bool = True) -> "StagedWrite":
         """Stage projections + manifest into ``txn`` without committing.
 
         Exposed so a caller (e.g. the state-machine processor) can compose a
@@ -169,6 +217,12 @@ class ManifestManager:
         commit point — this keeps the manifest genuinely the last write, so on a
         non-transactional (CE) crash a committed document always implies its
         outputs are already durable (they are never lost).
+
+        ``txn_id`` / ``ts`` let a caller preserve the *original* write identity and
+        timestamp (admin resync / restore) instead of minting fresh ones.
+        ``emit_changefeed=False`` stages the document WITHOUT a change-feed event —
+        a silent write that produces no downstream retention row (used by a
+        cold→hot resync so a rehydrate never loops back into the cold tier).
         """
         # Validate at the write boundary — covers put(), the state machine, and
         # backfill uniformly. Errors abort the (surrounding) transaction.
@@ -181,7 +235,7 @@ class ManifestManager:
 
         sc = self._registry.active_storage(entity)
         doc_id = self._proj.compute_doc_id(sc, document)
-        txn_id = uuid.uuid4().hex
+        txn_id = txn_id or uuid.uuid4().hex
 
         existing = self._store.get(sc.manifest_set, doc_id)
         prev_committed = existing is not None and existing.bins.get(M_STATUS) == STATUS_COMMITTED
@@ -189,7 +243,7 @@ class ManifestManager:
             raise DocumentAlreadyExists(f"{entity}/{doc_id} already exists")
 
         old_data = self._read_canonical_data(existing, sc)
-        ts = time.time()
+        ts = time.time() if ts is None else ts
         # Stamp the same write time into every projection envelope (_ts) and the
         # manifest, so the reaper can tell a young in-flight write from an orphan.
         records = self._proj.build(sc, document, doc_id=doc_id, txn_id=txn_id, ts=ts)
@@ -220,13 +274,15 @@ class ManifestManager:
         if self._index_in_txn:
             self._stage_reindex(entity, doc_id, old_data, document, txn)
         # Durable change-feed event (transactional outbox) — retention can't miss it.
-        event = CommitEvent(
-            entity=entity, doc_id=doc_id, txn_id=txn_id, contract_version=sc.version,
-            op="upsert", ts=ts, document=dict(document), version=expected_gen + 1,
-        )
-        # Wrap in one 'ev' bin — Aerospike bin names are capped at 15 chars, and
-        # the event has a "contract_version" field; map keys have no such limit.
-        self._store.put(self._changefeed_set, f"{doc_id}:{txn_id}", {"ev": event.to_dict()}, txn=txn)
+        # A silent restore (resync cold→hot) skips it so no new cold-tier row is born.
+        if emit_changefeed:
+            event = CommitEvent(
+                entity=entity, doc_id=doc_id, txn_id=txn_id, contract_version=sc.version,
+                op="upsert", ts=ts, document=dict(document), version=expected_gen + 1,
+            )
+            # Wrap in one 'ev' bin — Aerospike bin names are capped at 15 chars, and
+            # the event has a "contract_version" field; map keys have no such limit.
+            self._store.put(self._changefeed_set, f"{doc_id}:{txn_id}", {"ev": event.to_dict()}, txn=txn)
         # Caller-supplied records (e.g. state-machine output events) go here, still
         # BEFORE the manifest, so a committed manifest implies they are durable.
         if stage_extra is not None:
@@ -607,6 +663,120 @@ class ManifestManager:
         if rec is None:
             return (None, None)
         return (dict(codec.unpack(rec.bins[DOC_BIN])), best.get("vv"))
+
+    # --- resync (admin cold<->hot restore) -----------------------------
+
+    def restore(self, entity: str, document: dict[str, Any], *, txn_id: str,
+                valid_from: Optional[int] = None, tx_from: Optional[float] = None,
+                overwrite: bool = False) -> Optional[str]:
+        """Silently re-materialise ``document`` into the hot store (cold→hot resync).
+
+        Preserves the original write identity (``txn_id``) and timestamps
+        (``valid_from``/``tx_from``) and stages **no** change-feed event, so a
+        rehydrate reproduces the exact as-of view without minting a new version or
+        looping back into the cold tier. Idempotent by ``txn_id``; non-destructive
+        for an already-committed doc unless ``overwrite``. Returns the doc id if a
+        record was written, or ``None`` if the write was skipped as already-present.
+        """
+        sc = self._registry.active_storage(entity)
+        if sc.temporal == "bitemporal":
+            return self._restore_bitemporal_version(sc, entity, document, valid_from, tx_from, txn_id)
+        doc_id = self._proj.compute_doc_id(sc, document)
+        existing = self._store.get(sc.manifest_set, doc_id)
+        if existing is not None and existing.bins.get(M_STATUS) == STATUS_COMMITTED:
+            if existing.bins.get(M_TXN) == txn_id:
+                return None  # already restored under this identity — idempotent no-op
+            if not overwrite:
+                return None  # a live doc exists and we were told not to clobber it
+        native = self.native_txn_for(entity)
+        with self._store.transaction(native=native) as txn:
+            staged = self.stage_write(entity, document, txn, txn_id=txn_id,
+                                      ts=tx_from, emit_changefeed=False)
+        self._reap_superseded(staged.existing, staged.records, staged.sc)
+        if not self._index_in_txn:
+            self._reindex(entity, staged.doc_id, staged.old_data, document)
+        return staged.doc_id
+
+    def _restore_bitemporal_version(self, sc, entity, document, valid_from, tx_from,
+                                    txn_id: str) -> Optional[str]:
+        """Append one temporal version preserving its original (valid_from, tx_from,
+        txn). Idempotent: a version already carrying ``txn_id`` is left untouched.
+        No change-feed event is staged."""
+        if self._validator is not None:
+            self._validator.validate(entity, document).raise_if_failed()
+        doc_id = self._proj.compute_doc_id(sc, document)
+        vf = int(valid_from) if valid_from is not None else self._resolve_valid_from(sc, document, None)
+        tx = float(tx_from) if tx_from is not None else time.time()
+        vkey = f"{doc_id}|{tx:.6f}|{vf}"
+        cset = sc.canonical_projection.set
+        for attempt in range(self._write_max_retries + 1):
+            idx = self._store.get(sc.manifest_set, doc_id)
+            versions = list(idx.bins.get("versions", [])) if idx else []
+            if any(v.get("txn") == txn_id for v in versions):
+                return None  # this version was already restored — idempotent
+            gen = idx.generation if idx else 0
+            # Version payload is idempotent by vkey, so a retry re-puts the same bytes.
+            self._store.put(cset, vkey, {
+                DOC_BIN: codec.pack(document), META_DOC_ID: doc_id, META_TXN: txn_id,
+                "_valid_from": vf, "_tx_from": tx,
+            })
+            versions.append({"tx": tx, "vf": vf, "key": vkey, "txn": txn_id,
+                             "vv": self._active_vver(entity)})
+            try:
+                self._store.put(sc.manifest_set, doc_id, {
+                    "_bt": True, M_STATUS: STATUS_COMMITTED, M_DOC_ID: doc_id,
+                    "versions": versions,
+                }, expected_generation=gen)
+                return doc_id
+            except GenerationConflict:
+                if attempt >= self._write_max_retries:
+                    raise
+        return doc_id
+
+    def resync_units(self, entity: str, *, date_from: Optional[int] = None,
+                     date_to: Optional[int] = None):
+        """Yield ``ResyncUnit`` per committed version/doc for a hot→cold re-land.
+
+        Bitemporal entities are windowed on **valid-time** (each stored version
+        whose ``vf`` falls in ``[date_from, date_to]``); non-bitemporal entities on
+        **commit-time** (``_ts`` within the same dates, taken as UTC days). ``None``
+        bounds are open-ended.
+        """
+        sc = self._registry.active_storage(entity)
+        if sc.temporal == "bitemporal":
+            cset = sc.canonical_projection.set
+            for doc_id, idx in self._store.scan(sc.manifest_set):
+                if not idx.bins.get("_bt"):
+                    continue
+                for ordinal, v in enumerate(idx.bins.get("versions", []), start=1):
+                    if not _in_date_window(v.get("vf"), date_from, date_to):
+                        continue
+                    rec = self._store.get(cset, v["key"])
+                    if rec is None:
+                        continue
+                    yield ResyncUnit(
+                        doc_id=doc_id, document=dict(codec.unpack(rec.bins[DOC_BIN])),
+                        valid_from=v.get("vf"), tx_from=v.get("tx"), txn_id=v.get("txn"),
+                        version=ordinal, contract_version=sc.version, op="upsert",
+                    )
+        else:
+            lo, hi = _ts_window(date_from, date_to)
+            for doc_id, m in self._store.scan(sc.manifest_set):
+                if m.bins.get(M_STATUS) != STATUS_COMMITTED:
+                    continue
+                ts = m.bins.get(M_TS)
+                if lo is not None and (ts is None or ts < lo):
+                    continue
+                if hi is not None and (ts is None or ts >= hi):
+                    continue
+                doc = self._read_canonical_data(m, sc)
+                if not doc:
+                    continue
+                yield ResyncUnit(
+                    doc_id=doc_id, document=doc, valid_from=None, tx_from=ts,
+                    txn_id=m.bins.get(M_TXN), version=1,
+                    contract_version=m.bins.get(M_CVER, sc.version), op="upsert",
+                )
 
     def _reap_superseded(self, existing, records, sc: StorageContract) -> None:
         """Remove projection records no longer referenced after an update."""

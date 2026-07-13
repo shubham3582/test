@@ -92,6 +92,35 @@ python -m phronexus.retention.compact --collapse   # also drop superseded versio
 audit tail); `--collapse` keeps only the current version per doc for maximum
 shrinkage. Either way the reconciled current-state view is unchanged.
 
+### Resync between the hot and cold tiers
+
+Because each tier keeps a **lossless full copy** of every document — the canonical
+record in Aerospike, the `_raw` msgpack blob in Iceberg — a date-scoped slice can
+be rebuilt in either direction with `ResyncJob` (CLI `phronexus resync`, REST
+`POST /admin/resync`, permission `resync:control`):
+
+```bash
+# rehydrate a business-date window from the cold tier back into the hot store
+phronexus resync ns_exposure --direction cold-to-hot --from 20260101 --to 20260131
+
+# re-land a window from the hot store into Iceberg (e.g. seed a new table)
+phronexus resync ns_exposure --direction hot-to-cold --from 20260101 --to 20260131
+```
+
+Data is always materialised under the **target's active storage contract** — its
+projections/encodings hot-side, its Iceberg table shape cold-side; there is no
+ad-hoc format. Dates are read the way the entity is modelled: **valid-time**
+(`valid_time_field`) for bitemporal entities, **commit-time** otherwise.
+
+`cold-to-hot` is a **silent, coords-preserving** restore — it reconstructs from
+`_raw`, re-writes preserving the original `valid_from` / `tx_from` / `txn`, and
+stages **no** change-feed event, so an as-of read returns the identical version
+and the rehydrate never loops back into the cold tier. It's idempotent (keyed by
+the original `txn`) and non-destructive for a live hot doc unless `--overwrite`.
+`hot-to-cold` re-lands through the normal retention row shape, idempotent by
+`(_doc_id, _txn)`. Both are checkpointed/restartable and honour governance
+pause/cancel (`control_resync`), exactly like [backfill](governance.md).
+
 ## Binary journals
 
 Enable with `journal.enabled: true` (plus the specific toggles). Both journals are

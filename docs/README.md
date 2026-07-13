@@ -15,6 +15,7 @@
 | [ccr-reference.md](ccr-reference.md) | End-to-end reference: Counterparty-Credit-Risk saga, the hot value cube, and the exactly-once scheduler — all as config. |
 | [ccr-architecture.md](ccr-architecture.md) | Reference architecture: Phronexus as the hot-tier data plane for a fleet of CCR compute services — boundaries, who-owns-what, and the five disciplines. |
 | [retention-and-journals.md](retention-and-journals.md) | Insert-only, idempotent retention log (self-reconciling on replay) and the binary msgpack journals for messages and request/response pairs. |
+| [resync.md](resync.md) | Date-scoped store resync: rehydrate the hot store (Aerospike) from the cold tier (Iceberg) and vice versa — silent coords-preserving restore, idempotent, contract-driven format, checkpointed/governed. |
 | [deployment.md](deployment.md) | Production: Aerospike / MSK / S3 Tables, TLS/mTLS, auth, observability, operations, scaling. |
 | [logging.md](logging.md) | The one place to change log format/level/fields for the whole platform (structlog). |
 | [packaging.md](packaging.md) | Build the wheel, consume it as a library (extras matrix), and produce an offline/air-gapped install bundle. |

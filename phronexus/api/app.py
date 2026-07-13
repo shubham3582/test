@@ -16,6 +16,7 @@ from phronexus.api.errors import install_error_handlers
 from phronexus.api.middleware import RequestContextMiddleware
 from phronexus.api.providers import build_provider
 from phronexus.api.routers import (
+    admin,
     auth,
     contracts,
     data,
@@ -60,6 +61,7 @@ def create_app(px: Optional[Phronexus] = None, settings: Optional[Settings] = No
     app.include_router(contracts.router)
     app.include_router(schedules.router)
     app.include_router(governance.router)
+    app.include_router(admin.router)
 
     # Serve the management UI (self-contained SPA) at /ui.
     ui_dir = Path(__file__).parent / "ui"

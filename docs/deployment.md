@@ -52,6 +52,7 @@ flowchart TB
 | Retention compaction | `python -m phronexus.retention.compact` | scheduled job (pairs with the scheduler) |
 | Audit / trace worker | `python -m phronexus.audit.main` | consumer group members |
 | Reaper / backfill | `phronexus reap …` / `phronexus backfill …` | cron / one-shot jobs |
+| Store resync (hot↔cold) | `phronexus resync … --direction …` | one-shot / rehydrate ([resync.md](resync.md)) |
 
 ## Contracts: Aerospike is the source of truth
 
@@ -172,7 +173,7 @@ auth:
     admin:    ["*"]
     author:   ["governance:read", "contract:draft", "contract:submit"]
     approver: ["governance:read", "contract:approve", "contract:publish", "evidence:export"]
-    operator: ["governance:read", "backfill:control", "cob:set", "contract:promote"]
+    operator: ["governance:read", "backfill:control", "resync:control", "cob:set", "contract:promote"]
   users:                     # map local users (or OIDC groups) to roles
     alice: {password_sha256: "…", roles: ["author"]}
 
@@ -436,6 +437,7 @@ otel_endpoint: http://otel-collector:4317
 | Task | How | When |
 |---|---|---|
 | **Backfill** a contract change | `phronexus backfill <entity>` | after publishing a new storage/query version |
+| **Resync** hot↔cold (rehydrate / re-land) | `phronexus resync <entity> --direction cold-to-hot\|hot-to-cold [--from --to]` | hot-store rebuild / seed a cold table ([resync.md](resync.md)) |
 | **Reap** orphan projections | `phronexus reap <entity> …` | periodic (crash cleanup) |
 | **Retention** to Iceberg | `python -m phronexus.retention.main` | always-on worker |
 | **Audit / trace** trail | `python -m phronexus.audit.main` | always-on worker (powers the Trace view) |

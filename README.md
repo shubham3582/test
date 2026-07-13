@@ -11,7 +11,7 @@ contracts** that live in the datastore and hot-reload, so new business entities
 - **Retention store:** Apache Iceberg (optional, async, long-term) — an insert-only, idempotent log
 - **Change feed:** Kafka / Redpanda
 - **Interfaces:** Python SDK + REST + a self-contained web console
-- **Data plane:** a transactional state machine, a distributed exactly-once scheduler, **bitemporal** as-of reads, binary (msgpack) journals, a per-document **trace / debug view**, and **lineage** (source event → result)
+- **Data plane:** a transactional state machine, a distributed exactly-once scheduler, **bitemporal** as-of reads, binary (msgpack) journals, a per-document **trace / debug view**, **lineage** (source event → result), and date-scoped **tier resync** (rebuild the hot store from cold, and back)
 - **Control plane:** a governance layer — config-driven **RBAC**, a change→approve→publish workflow (N-of-M approvals + separation of duties), immutable **hash-chained history**, environment **promotion**, per-environment **COB**, backfill control, and tamper-evident **evidence export**
 
 > **Status:** a hardened, guarantee-backed data plane plus a full governance
@@ -45,6 +45,7 @@ Full docs are in [`docs/`](docs/):
 - **[scaling.md](docs/scaling.md)** — scaling the stateless runner to 500K TPS+: partitions × replicas, Aerospike sizing, decoupling the produce path, hot-partition skew, and the config knobs.
 - **[ccr-reference.md](docs/ccr-reference.md)** — production-depth Counterparty-Credit-Risk reference: the ten proofs (onboarding → recovery), all as config.
 - **[retention-and-journals.md](docs/retention-and-journals.md)** — insert-only, self-reconciling retention log and the binary msgpack journals.
+- **[resync.md](docs/resync.md)** — date-scoped store resync: rehydrate hot (Aerospike) from cold (Iceberg) and back — silent coords-preserving restore, idempotent, checkpointed/governed.
 - **[deployment.md](docs/deployment.md)** — production: Aerospike / MSK / S3 Tables, native-client options, TLS/mTLS, auth, RBAC, observability, ops.
 
 ## Try it (no services)
@@ -76,8 +77,8 @@ contracts with their version history, validate documents, drive state machines,
 browse data, and **trace** any document's lifecycle. It also fronts the **control
 plane** — permission-gated **Change Requests** (draft → approve → publish),
 **Fleet** (active versions, drift, COB), hash-chained **History**, **Backfill**
-controls, **Promotion**, **Evidence** export, and **Lineage** — with tabs and
-controls gated by the caller's permissions. Behind JWT login (fixed users now;
+controls, **Resync** (rebuild hot↔cold), **Promotion**, **Evidence** export, and
+**Lineage** — with tabs and controls gated by the caller's permissions. Behind JWT login (fixed users now;
 Microsoft Entra / Azure AD via the OIDC provider seam). See
 [docs/deployment.md](docs/deployment.md#management-ui).
 
@@ -251,6 +252,10 @@ place — so it **self-reconciles on replay**:
 - The Kafka consumer uses **manual offset commit** (advance only after the batch
   is flushed), so a crash replays rather than drops.
 
+Because the `_raw` blob is a lossless copy of every document, a date window can be
+**rebuilt in either direction** — rehydrate the hot store from Iceberg, or re-land
+hot documents into it — with `phronexus resync` (see [docs/resync.md](docs/resync.md)).
+
 See [docs/retention-and-journals.md](docs/retention-and-journals.md).
 
 ```bash
@@ -395,7 +400,8 @@ product. It **wraps, never bypasses**, the registry primitives.
 - **Evidence export** — a windowed, tamper-evident bundle (audit trail +
   interactions + governance log) with a content hash and log-head hash.
 - **Fleet + backfill + COB** — one view of active versions, drift, and COB;
-  cooperative pause/resume/cancel of backfills; a per-environment processing date.
+  cooperative pause/resume/cancel of backfills and tier resyncs; a per-environment
+  processing date.
 
 ```python
 cr = px.governance.draft("alice", contract_v2)      # author drafts
@@ -472,8 +478,20 @@ field), re-project existing documents onto the active version. Idempotent:
 phronexus --contracts-dir contracts_examples backfill trade
 ```
 
+**Store resync** — rebuild a date window between the hot store (Aerospike) and
+the cold tier (Iceberg) in either direction: `cold-to-hot` rehydrates the hot
+store from retention (silent, coords-preserving — the exact as-of view is
+reproduced), `hot-to-cold` re-lands committed documents into Iceberg. Idempotent,
+checkpointed, and governed (`resync:control`). See
+[docs/resync.md](docs/resync.md):
+
+```bash
+phronexus resync ns_exposure --direction cold-to-hot --from 20260101 --to 20260131
+```
+
 **Admin CLI** (`phronexus …`): `publish-contract`, `put`, `get`, `delete`,
-`query [--view]`, `backfill [--dry-run]`, `reap`. Backend/auth from `PHRONEXUS_*`.
+`query [--view]`, `backfill [--dry-run]`, `resync [--direction …]`, `reap`.
+Backend/auth from `PHRONEXUS_*`.
 
 **Load harness** (in-memory backend, exercises writes → reads → search →
 retention end to end):
@@ -566,7 +584,7 @@ phronexus/
   observability/       # structured logging + OTel telemetry + durability preflight
   api/                 # FastAPI app, routers (incl. governance), auth + RBAC, UI
   sdk/                 # PhronexusClient (remote HTTP SDK)
-  admin/               # contract backfill job
+  admin/               # ops jobs: contract backfill + hot↔cold store resync
   cli.py               # phronexus admin CLI
   core.py              # Phronexus facade (in-process SDK entrypoint)
 scripts/loadtest.py    # throughput harness

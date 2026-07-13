@@ -1,8 +1,9 @@
 """Admin CLI: ``phronexus <command>`` (or ``python -m phronexus.cli``).
 
 A thin wrapper over the SDK for operators: publish/load contracts, do CRUD and
-queries, run backfills, and sweep orphans. Backend and auth come from the
-environment (``PHRONEXUS_*`` / ``.env``), same as every other component.
+queries, run backfills, resync data between the hot and cold stores, and sweep
+orphans. Backend and auth come from the environment (``PHRONEXUS_*`` / ``.env``),
+same as every other component.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Any
 
 from phronexus import Phronexus, Settings
 from phronexus.admin.backfill import BackfillJob
+from phronexus.admin.resync import DIRECTIONS, ResyncJob
 
 
 def _print(obj: Any) -> None:
@@ -67,6 +69,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("entity")
     p.add_argument("--dry-run", action="store_true")
 
+    p = sub.add_parser("resync", help="resync a date window between the hot and cold stores")
+    p.add_argument("entity")
+    p.add_argument("--direction", required=True, choices=DIRECTIONS,
+                   help="cold-to-hot (rehydrate) or hot-to-cold (re-land)")
+    p.add_argument("--from", dest="date_from", type=int, help="start date YYYYMMDD (inclusive)")
+    p.add_argument("--to", dest="date_to", type=int, help="end date YYYYMMDD (inclusive)")
+    p.add_argument("--overwrite", action="store_true",
+                   help="cold-to-hot: overwrite a live hot doc instead of skipping it")
+    p.add_argument("--dry-run", action="store_true")
+
     sub.add_parser("doctor", help="check the durability / no-loss posture of this deployment")
 
     p = sub.add_parser("reap", help="sweep orphan projections")
@@ -103,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "backfill":
             n = BackfillJob(px).run(args.entity, dry_run=args.dry_run)
             _print({"backfilled": n, "dry_run": args.dry_run})
+        elif args.cmd == "resync":
+            n = ResyncJob(px).run(
+                args.entity, direction=args.direction, date_from=args.date_from,
+                date_to=args.date_to, overwrite=args.overwrite, dry_run=args.dry_run)
+            _print({"resynced": n, "direction": args.direction,
+                    "from": args.date_from, "to": args.date_to, "dry_run": args.dry_run})
         elif args.cmd == "reap":
             _print({"removed": px.reaper.sweep(args.entities)})
         elif args.cmd == "doctor":

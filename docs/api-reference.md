@@ -64,6 +64,12 @@ px = Phronexus(Settings())          # backend/kafka/iceberg from env or ./config
 | `lineage(trade_id, entity="ccr_trade", as_of=None)` | end-to-end lineage: source event → saga → cube → exposure, correlated + ordered ([ccr-reference.md](ccr-reference.md)) |
 | `close()` | release connections |
 
+### Admin jobs (`phronexus.admin`)
+| Job | Does |
+|---|---|
+| `BackfillJob(px).run(entity, dry_run=False)` | re-project committed docs under the active contract (new projections / searchable fields) |
+| `ResyncJob(px).run(entity, direction, date_from=None, date_to=None, overwrite=False, dry_run=False)` | date-scoped resync between the hot (Aerospike) and cold (Iceberg) tiers — `cold-to-hot` rehydrates from Iceberg (silent, coords-preserving), `hot-to-cold` re-lands into Iceberg (idempotent). Bitemporal entities window on **valid-time**, others on **commit-time**. Checkpointed/restartable; honours governance pause/cancel. |
+
 ### Governance (`px.governance`)
 
 The control plane — full guide in [governance.md](governance.md). Every method takes an
@@ -80,6 +86,7 @@ The control plane — full guide in [governance.md](governance.md). Every method
 | `get_cob()` · `set_cob(actor, cob)` · `advance_cob(actor)` | environment COB / processing date |
 | `fleet()` | active version per entity · drift · COB · backfill · history integrity |
 | `backfill_status()` · `control_backfill(actor, entity, action)` | fleet-visible backfill + pause/resume/cancel |
+| `resync_status()` · `control_resync(actor, run_key, action)` | fleet-visible tier resync (keyed `entity:direction:window`) + pause/resume/cancel |
 | `log.entries()` · `log.verify()` | immutable, hash-chained governance history |
 | `registry.compat_report(sc)` · `registry.diff(a, b)` | structured compatibility explanation + version diff |
 
@@ -118,6 +125,7 @@ list: `/openapi.json` (Swagger UI at `/docs`).
 | `POST /governance/rollback` | `contract:rollback` |
 | `GET/POST /governance/cob` | read / `cob:set` |
 | `GET /governance/backfill` · `POST /governance/backfill/{entity}/{action}` | read / `backfill:control` |
+| `POST /admin/resync` · `GET /admin/resync/status` · `POST /admin/resync/control` | `resync:control` |
 | `POST /governance/promote/{identity}/bundle` · `POST /governance/import` | `contract:promote` |
 | `POST /governance/evidence` | `evidence:export` |
 

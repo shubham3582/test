@@ -74,7 +74,7 @@ services:
       # Multiple roles so RBAC (Stage-2) is demonstrable: admin sees everything;
       # alice=author, bob=approver, ops=operator.
       PHRONEXUS_API__AUTH__USERS: '{"admin":{"password":"admin","roles":["admin"]},"alice":{"password":"alice","roles":["author"]},"bob":{"password":"bob","roles":["approver"]},"ops":{"password":"ops","roles":["operator"]}}'
-      PHRONEXUS_API__AUTH__ROLES: '{"admin":["*"],"viewer":["governance:read"],"author":["governance:read","contract:draft","contract:submit"],"approver":["governance:read","contract:approve","contract:publish","contract:rollback","evidence:export"],"operator":["governance:read","backfill:run","backfill:control","cob:set","contract:promote"]}'
+      PHRONEXUS_API__AUTH__ROLES: '{"admin":["*"],"viewer":["governance:read"],"author":["governance:read","contract:draft","contract:submit"],"approver":["governance:read","contract:approve","contract:publish","contract:rollback","evidence:export"],"operator":["governance:read","backfill:run","backfill:control","resync:control","cob:set","contract:promote"]}'
       # Governance N-of-M policy (1 approval everywhere for the demo).
       PHRONEXUS_GOVERNANCE__APPROVAL_POLICY: '{"*":{"*":1}}'
       PHRONEXUS_GOVERNANCE__ENVIRONMENT: prod
@@ -82,6 +82,17 @@ services:
       # (the Stage-1 fail-fast otherwise refuses to build the state machine).
       PHRONEXUS_STATEMACHINE__REQUIRE_ATOMIC: "false"
       PHRONEXUS_STATEMACHINE__DLQ_TOPIC: kafka://phronexus.dlq
+      # Point the API at the cold tier too, so the admin Resync endpoint/UI
+      # (POST /admin/resync) can rehydrate from / re-land into real Iceberg.
+      # Harmless when the `iceberg` profile is down — the warehouse is built
+      # lazily only when a resync is invoked. Requires the `iceberg` profile up.
+      PHRONEXUS_ICEBERG__BACKEND: iceberg
+      PHRONEXUS_ICEBERG__CATALOG_URI: http://iceberg-rest:8181
+      PHRONEXUS_ICEBERG__WAREHOUSE: s3://warehouse/
+      PHRONEXUS_ICEBERG__S3_ENDPOINT: http://minio:9000
+      PHRONEXUS_ICEBERG__S3_REGION: us-east-1
+      PHRONEXUS_ICEBERG__S3_ACCESS_KEY_ID: phronexus
+      PHRONEXUS_ICEBERG__S3_SECRET_ACCESS_KEY: phronexus-secret
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
       interval: 5s

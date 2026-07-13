@@ -183,6 +183,11 @@ row** (`_txn` idempotency key, `_version` order, `_op` incl. delete tombstones,
 `_version` per doc, tombstones dropped), so replays are idempotent and the
 consumer only needs at-least-once delivery with **manual offset commit**.
 
+Because the `_raw` blob is a lossless copy, `ResyncJob` can rebuild a date window
+in **either direction** — rehydrate the hot store from Iceberg (a silent,
+coords-preserving restore) or re-land hot documents into it
+([resync.md](resync.md)).
+
 The same **msgpack envelope** convention (metadata bins + one blob) backs the
 journals: a **message journal** (full inbound Kafka message) and a
 **request/response journal** (the state machine records every `process()` when
@@ -217,7 +222,7 @@ phronexus/
   journal.py           message + request/response journals
   native.py            supported native-Aerospike accessor (managed-set guard)
   kafka_client.py      Kafka/MSK client builder (TLS/mTLS/SASL/IAM)
-  admin/               contract backfill job
+  admin/               ops jobs: contract backfill + hot↔cold store resync
   observability/       structured logging + OTel telemetry
   api/                 FastAPI app, routers, auth, middleware, server
   sdk/                 PhronexusClient (remote HTTP SDK)

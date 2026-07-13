@@ -170,7 +170,7 @@ function toggleTheme(){ applyTheme((document.documentElement.getAttribute('data-
 (function(){ let t='light'; try{ t=localStorage.getItem('phx-theme')||'light'; }catch(e){} applyTheme(t); })();
 const VIEWS = [['contracts','Contracts'],['validate','Document Validator'],['sm','State Machine'],['data','Data Browser'],['trace','Trace'],
   ['changes','Change Requests','governance:read'],['fleet','Fleet','governance:read'],['history','History','governance:read'],
-  ['backfill','Backfill','governance:read'],['promotion','Promotion','contract:promote'],['evidence','Evidence','evidence:export'],
+  ['backfill','Backfill','governance:read'],['resync','Resync','resync:control'],['promotion','Promotion','contract:promote'],['evidence','Evidence','evidence:export'],
   ['lineage','Lineage','governance:read']];
 const KINDS = ['storage','query','view','validation','transition','stream','ingress'];
 
@@ -234,7 +234,7 @@ async function showApp() {
     b.className = S.view===id?'active':''; b.onclick=()=>{ S.view=id; showApp(); }; nav.appendChild(b); });
   ({contracts:renderContracts, validate:renderValidate, sm:renderSM, data:renderData, trace:renderTrace,
     changes:renderChanges, fleet:renderFleet, history:renderHistory, backfill:renderBackfill,
-    promotion:renderPromotion, evidence:renderEvidence, lineage:renderLineage}[S.view])();
+    resync:renderResync, promotion:renderPromotion, evidence:renderEvidence, lineage:renderLineage}[S.view])();
 }
 
 // ---- Contracts (read-only viewer) ----
@@ -672,6 +672,52 @@ async function renderBackfill(){
     <table><tr><th>Entity</th><th>State</th><th>Count</th><th>Cursor</th><th>Actions</th></tr>${rows}</table>`;
 }
 async function bfCtl(entity,action){ try{ await api('/governance/backfill/'+entity+'/'+action,{method:'POST'}); renderBackfill(); }catch(e){ alert(e.body?.detail||e.message); } }
+
+// ---- Admin: Resync (hot <-> cold store rebuild) ----
+async function renderResync(){
+  const m=document.getElementById('main');
+  let d; try{ d=await api('/admin/resync/status'); }catch(e){ d={}; }
+  const rows=Object.entries(d||{}).map(([k,st])=>{
+    const acts=['pause','resume','cancel','reset'].map(a=>`<button class="mini" onclick="rsCtl('${escapeHtml(k)}','${a}')">${a[0].toUpperCase()+a.slice(1)}</button>`).join(' ');
+    return `<tr><td>${escapeHtml(st.entity||'—')}</td><td><span class="pill">${escapeHtml(st.direction||'—')}</span></td><td>${escapeHtml(st.window||'—')}</td><td><span class="pill">${escapeHtml(st.state||'—')}</span></td><td>${st.count==null?'—':st.count}</td><td>${acts}</td></tr>`;
+  }).join('')||'<tr><td colspan="6" class="muted">No resync runs yet.</td></tr>';
+  const last = S._rsLast ? res(S._rsLast.ok, [S._rsLast.msg]) : '';
+  m.innerHTML=`<h2>Resync</h2>
+    <div class="sub">Rebuild a date window between the hot store (Aerospike) and the cold tier (Iceberg). Data is materialised under the target's active storage contract. Bitemporal entities window on valid-time (COB); others on commit-time. See docs/resync.md.</div>
+    <div class="card"><h3>Run a resync</h3>
+      <div class="row">
+        <div><label>Entity</label><input id="rsEntity" placeholder="ns_exposure"></div>
+        <div><label>Direction</label><select id="rsDir">
+          <option value="cold-to-hot">cold-to-hot (rehydrate hot from Iceberg)</option>
+          <option value="hot-to-cold">hot-to-cold (re-land into Iceberg)</option></select></div>
+        <div><label>From (YYYYMMDD, optional)</label><input id="rsFrom" placeholder="20260101"></div>
+        <div><label>To (YYYYMMDD, optional)</label><input id="rsTo" placeholder="20260131"></div>
+      </div>
+      <div class="toolbar">
+        <label style="display:inline-flex;align-items:center;gap:6px;"><input type="checkbox" id="rsOver"> overwrite live hot doc (cold→hot)</label>
+        <label style="display:inline-flex;align-items:center;gap:6px;"><input type="checkbox" id="rsDry"> dry run</label>
+        <button class="primary" onclick="rsRun()">Run resync</button>
+      </div>
+      <div id="rsOut">${last}</div>
+    </div>
+    <div class="card"><h3>Runs</h3><div class="sub">Checkpointed &amp; fleet-visible. Pause / cancel are honored cooperatively between documents.</div>
+      <table><tr><th>Entity</th><th>Direction</th><th>Window</th><th>State</th><th>Count</th><th>Actions</th></tr>${rows}</table></div>`;
+}
+async function rsRun(){
+  const body={ entity:document.getElementById('rsEntity').value.trim(),
+    direction:document.getElementById('rsDir').value,
+    date_from: parseInt(document.getElementById('rsFrom').value,10)||null,
+    date_to: parseInt(document.getElementById('rsTo').value,10)||null,
+    overwrite: document.getElementById('rsOver').checked,
+    dry_run: document.getElementById('rsDry').checked };
+  if(!body.entity){ document.getElementById('rsOut').innerHTML=res(false,['Entity is required']); return; }
+  try{ const r=await api('/admin/resync',{method:'POST',body:JSON.stringify(body)});
+    const win=(body.date_from||body.date_to)?` in ${body.date_from||'—'}..${body.date_to||'—'}`:'';
+    S._rsLast={ok:true, msg:`${r.dry_run?'[dry-run] ':''}${r.direction}: ${r.resynced} unit(s)${win}`};
+  }catch(e){ S._rsLast={ok:false, msg:e.body?.detail||e.message}; }
+  renderResync();
+}
+async function rsCtl(runKey,action){ try{ await api('/admin/resync/control',{method:'POST',body:JSON.stringify({run_key:runKey,action})}); renderResync(); }catch(e){ alert(e.body?.detail||e.message); } }
 
 // ---- Governance: Promotion ----
 async function renderPromotion(){

@@ -287,6 +287,7 @@ class GovernanceService:
             "active": lc["active"],           # "active:<kind>:<subject>" -> identity
             "contracts": lc["contracts"],
             "backfills": self.backfill_status(),
+            "resyncs": self.resync_status(),
             "history": self.log.verify(),     # {ok, count} — chain integrity at a glance
         }
 
@@ -317,3 +318,34 @@ class GovernanceService:
         self._store.put(self._cfg.backfill_state_set, entity, cur)
         self.log.append(f"backfill.{action}", actor, target=entity)
         return {"entity": entity, "action": action}
+
+    # --- resync status + intervention ----------------------------------
+
+    _RS_FIELDS = ("entity", "direction", "window", "state", "cursor", "count",
+                  "done", "req_action", "error", "updated_ts")
+
+    def resync_status(self, run_key: Optional[str] = None) -> dict:
+        out: dict[str, dict] = {}
+        for key, rec in self._store.scan(self._cfg.resync_state_set):
+            if run_key is not None and key != run_key:
+                continue
+            out[key] = {k: rec.bins.get(k) for k in self._RS_FIELDS}
+        return out
+
+    def control_resync(self, actor: str, run_key: str, action: str) -> dict:
+        """Pause/cancel/resume/reset a resync run, keyed by ``entity:direction:window``.
+        Pause/cancel are honoured cooperatively by the running job between units."""
+        if action not in ("pause", "resume", "cancel", "reset"):
+            raise GovernanceError(f"unknown resync action {action!r}")
+        rec = self._store.get(self._cfg.resync_state_set, run_key)
+        cur = dict(rec.bins) if rec else {}
+        if action == "reset":
+            cur.update(cursor=None, done=False, state="reset", req_action=None)
+        elif action == "resume":
+            cur.update(req_action=None, state="running")
+        else:  # pause | cancel
+            cur["req_action"] = action
+        cur["updated_ts"] = time.time()
+        self._store.put(self._cfg.resync_state_set, run_key, cur)
+        self.log.append(f"resync.{action}", actor, target=run_key)
+        return {"run_key": run_key, "action": action}

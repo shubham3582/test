@@ -28,7 +28,7 @@ roles:
   approver: ["governance:read", "contract:approve", "contract:publish",
              "contract:rollback", "evidence:export"]
   operator: ["governance:read", "backfill:run", "backfill:control",
-             "cob:set", "contract:promote"]
+             "resync:control", "cob:set", "contract:promote"]
 ```
 
 Wildcards: `*` grants everything; `contract:*` grants every `contract:` permission.
@@ -44,6 +44,7 @@ Wildcards: `*` grants everything; `contract:*` grants every `contract:` permissi
 | `contract:rollback` | governed rollback of the active pointer |
 | `contract:promote` | export/import promotion bundles |
 | `backfill:run` / `backfill:control` | run / pause-resume-cancel a backfill |
+| `resync:control` | run / pause-resume-cancel a hot↔cold tier resync (`/admin/resync`) |
 | `cob:set` | set/advance the environment COB |
 | `evidence:export` | export an audit-evidence bundle |
 
@@ -211,16 +212,28 @@ px.governance.control_backfill("ops", "trade", "pause")   # pause|resume|cancel|
 **REST** — `GET /governance/backfill`, `POST /governance/backfill/{entity}/{action}`
 (`backfill:control`). Run the job itself via `python -m phronexus.cli backfill <entity>`.
 
+**Store resync** (`ResyncJob`) shares the same shape — a date-scoped rebuild
+between the hot store (Aerospike) and the cold tier (Iceberg), checkpointed and
+controllable. It is fleet-visible and governed the same way, keyed by
+`entity:direction:window`:
+
+```python
+px.governance.resync_status()                              # all runs (fleet view)
+px.governance.control_resync("ops", run_key, "pause")      # pause|resume|cancel|reset
+```
+**REST** — `POST /admin/resync`, `GET /admin/resync/status`,
+`POST /admin/resync/control` (`resync:control`). Full guide: [resync.md](resync.md).
+
 ---
 
 ## 9. Fleet visibility
 
 One call summarises the deployment: active version per entity, registry cache age (drift),
-COB, backfill states, and the history chain-integrity check.
+COB, backfill and resync states, and the history chain-integrity check.
 
 ```python
 px.governance.fleet()
-# {environment, is_production, cob, cache_age_seconds, active:{...}, backfills:{...}, history:{ok,count}}
+# {environment, is_production, cob, cache_age_seconds, active:{...}, backfills:{...}, resyncs:{...}, history:{ok,count}}
 ```
 **REST** — `GET /governance/fleet` (`governance:read`).
 

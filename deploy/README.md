@@ -104,6 +104,14 @@ curl -fsS -X PUT localhost:8080/entities/bond/documents -H 'content-type: applic
 docker compose --profile iceberg run --rm iceberg-validate
 #   warehouse.bonds          log_rows=1    current=1    sample={'isin': 'US0378331005', ...}
 #   OK: 1 row(s) retained across 1 Iceberg table(s).
+
+# 5) Rebuild between tiers with resync (the iceberg-validate service has both
+#    Aerospike + Iceberg env, so reuse it to run the admin CLI):
+#    re-land hot -> cold, or rehydrate cold -> hot (see ../docs/resync.md).
+docker compose --profile iceberg run --rm iceberg-validate \
+  python -m phronexus.cli resync bond --direction hot-to-cold
+docker compose --profile iceberg run --rm iceberg-validate \
+  python -m phronexus.cli resync bond --direction cold-to-hot   # rehydrate the hot store
 ```
 
 The retention worker creates the namespace + table on first use (no manual DDL),

@@ -234,7 +234,7 @@ class AuthSettings(BaseModel):
     # Config-driven RBAC: role -> list of permission strings. A principal's
     # effective permissions are the union over its roles. The wildcard "*" grants
     # everything. Governance permissions are colon-namespaced, e.g.
-    # "contract:approve", "contract:publish", "backfill:control", "cob:set",
+    # "contract:approve", "contract:publish", "backfill:control", "resync:control", "cob:set",
     # "evidence:export", "governance:read". Default keeps the legacy "admin" role
     # all-powerful; override entirely from config / an OIDC group->role mapping.
     roles: dict[str, list[str]] = Field(default_factory=lambda: {"admin": ["*"]})
@@ -384,6 +384,7 @@ class GovernanceSettings(BaseModel):
     log_set: str = "_gov_log"
     env_set: str = "_gov_env"
     backfill_state_set: str = "_backfill_state"
+    resync_state_set: str = "_resync_state"    # per-run checkpoint for admin resync
 
 
 class ReaperSettings(BaseModel):
